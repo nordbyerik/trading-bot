@@ -198,15 +198,50 @@ class MarketAnalysisOrchestrator:
         )
         logger.info(f"Fetched {len(markets)} {market_status} markets")
 
+        # Filter out multivariate markets (they don't have orderbook depth data)
+        regular_markets = [
+            m for m in markets
+            if not m.get("ticker", "").startswith("KXMV")
+        ]
+        multi_markets = len(markets) - len(regular_markets)
+
+        if multi_markets > 0:
+            logger.info(
+                f"Filtered out {multi_markets} multivariate markets (no orderbook support)"
+            )
+
+        if len(regular_markets) == 0:
+            logger.warning(
+                "No regular markets found! All markets are multivariate. "
+                "Analyzers may not find any opportunities."
+            )
+            return []
+
+        logger.info(f"Processing {len(regular_markets)} regular markets")
+
         # Fetch orderbooks for each market
         enriched_markets = []
-        for i, market in enumerate(markets):
+        empty_orderbook_count = 0
+
+        for i, market in enumerate(regular_markets):
             ticker = market.get("ticker")
 
             try:
                 orderbook_response = self.client.get_orderbook(ticker)
                 # Extract the actual orderbook data from the response wrapper
-                market["orderbook"] = orderbook_response.get("orderbook", {})
+                orderbook = orderbook_response.get("orderbook", {})
+                market["orderbook"] = orderbook
+
+                # Check if orderbook has actual data
+                yes_orders = orderbook.get("yes")
+                no_orders = orderbook.get("no")
+
+                if yes_orders is None and no_orders is None:
+                    empty_orderbook_count += 1
+                    logger.debug(f"Market {ticker} has null orderbook")
+                elif (not yes_orders or len(yes_orders) == 0) and (not no_orders or len(no_orders) == 0):
+                    empty_orderbook_count += 1
+                    logger.debug(f"Market {ticker} has empty orderbook")
 
                 # Extract series_ticker if not present (needed for candlestick fetching)
                 if not market.get("series_ticker") and ticker:
@@ -217,7 +252,7 @@ class MarketAnalysisOrchestrator:
 
                 if (i + 1) % 20 == 0:
                     logger.info(
-                        f"Fetched orderbooks for {i + 1}/{len(markets)} markets"
+                        f"Fetched orderbooks for {i + 1}/{len(regular_markets)} markets"
                     )
 
             except Exception as e:
@@ -227,6 +262,13 @@ class MarketAnalysisOrchestrator:
         logger.info(
             f"Successfully enriched {len(enriched_markets)} markets with orderbook data"
         )
+
+        if empty_orderbook_count > 0:
+            logger.warning(
+                f"{empty_orderbook_count} markets have empty/null orderbooks "
+                f"({empty_orderbook_count / len(enriched_markets) * 100:.1f}%)"
+            )
+
         return enriched_markets
 
     def run_analysis(self, markets: List[Dict[str, Any]]) -> List[Any]:

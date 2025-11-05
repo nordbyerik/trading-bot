@@ -40,18 +40,64 @@ class ArbitrageAnalyzer(BaseAnalyzer):
     def get_default_config(self) -> Dict[str, Any]:
         return {
             # Hard opportunity thresholds (strict requirements)
-            "hard_min_arb_cents": 2,  # Minimum arbitrage profit to flag as hard (in cents)
+            "hard_min_arb_cents": 5,  # Minimum arbitrage profit to flag as hard (in cents)
             # Soft opportunity thresholds (relaxed requirements)
-            "soft_min_arb_cents": 1,  # Minimum arbitrage profit to flag as soft (in cents)
+            "soft_min_arb_cents": 3,  # Minimum arbitrage profit to flag as soft (in cents)
             "transaction_cost_cents": 1,  # Estimated transaction costs per side
+            # IMPORTANT: These are GROSS profit thresholds, before transaction costs.
+            # Net profit = gross - (transaction_cost_cents * 2)
+            # Examples:
+            #   - hard: 5¢ gross - 2¢ fees = 3¢ net profit
+            #   - soft: 3¢ gross - 2¢ fees = 1¢ net profit
         }
 
     def _setup(self) -> None:
-        """Apply default config values."""
+        """Apply default config values and validate configuration."""
         defaults = self.get_default_config()
         for key, value in defaults.items():
             if key not in self.config:
                 self.config[key] = value
+
+        # Validate that thresholds are profitable after transaction costs
+        self._validate_profitable_thresholds()
+
+    def _validate_profitable_thresholds(self) -> None:
+        """
+        Ensure arbitrage thresholds will be profitable after transaction costs.
+
+        Raises:
+            ValueError: If thresholds would result in unprofitable trades
+        """
+        transaction_cost = self.config["transaction_cost_cents"]
+        total_costs = transaction_cost * 2  # Cost for both sides of trade
+
+        soft_threshold = self.config["soft_min_arb_cents"]
+        hard_threshold = self.config["hard_min_arb_cents"]
+
+        if soft_threshold <= total_costs:
+            raise ValueError(
+                f"ArbitrageAnalyzer: soft_min_arb_cents ({soft_threshold}¢) must be "
+                f"greater than total transaction costs ({total_costs}¢). "
+                f"Current config would result in UNPROFITABLE trades! "
+                f"Net profit would be: {soft_threshold}¢ - {total_costs}¢ = "
+                f"{soft_threshold - total_costs}¢"
+            )
+
+        if hard_threshold <= total_costs:
+            raise ValueError(
+                f"ArbitrageAnalyzer: hard_min_arb_cents ({hard_threshold}¢) must be "
+                f"greater than total transaction costs ({total_costs}¢). "
+                f"Current config would result in UNPROFITABLE trades!"
+            )
+
+        # Log the net profit expectations
+        soft_net = soft_threshold - total_costs
+        hard_net = hard_threshold - total_costs
+
+        logger.info(
+            f"ArbitrageAnalyzer thresholds validated: "
+            f"soft (net: {soft_net}¢), hard (net: {hard_net}¢)"
+        )
 
     def analyze(self, markets: List[Dict[str, Any]]) -> List[Opportunity]:
         """
