@@ -189,8 +189,12 @@ class MarketAnalysisOrchestrator:
         # Fetch markets up to the configured limit
         max_markets = self.config.get("max_markets_to_analyze", 100)
         market_status = self.config.get("market_status", "open")
+        min_volume = self.config.get("min_market_volume")
+
         markets = self.client.get_all_open_markets(
-            max_markets=max_markets, status=market_status
+            max_markets=max_markets,
+            status=market_status,
+            min_volume=min_volume
         )
         logger.info(f"Fetched {len(markets)} {market_status} markets")
 

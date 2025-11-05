@@ -229,49 +229,81 @@ class KalshiDataClient:
 
         return self._make_request("/markets", params=params)
 
-    def get_all_open_markets(self, max_markets: Optional[int] = None, status: str = "open") -> List[Dict]:
+    def get_all_open_markets(
+        self,
+        max_markets: Optional[int] = None,
+        status: str = "open",
+        min_volume: Optional[int] = None
+    ) -> List[Dict]:
         """
         Fetch all markets with specified status, handling pagination automatically.
 
         Args:
             max_markets: Maximum number of markets to fetch (None for all markets)
             status: Market status filter ('open', 'closed', 'settled', or comma-separated list)
+            min_volume: Minimum volume threshold - only keep markets with volume >= this value
 
         Returns:
-            List of market dictionaries
+            List of market dictionaries (filtered by volume if min_volume is specified)
         """
         all_markets = []
         cursor = None
+        total_fetched = 0
+        total_filtered_out = 0
 
-        logger.info(f"Fetching {status} markets{f' (max: {max_markets})' if max_markets else ''}...")
+        logger.info(
+            f"Fetching {status} markets"
+            f"{f' (max: {max_markets})' if max_markets else ''}"
+            f"{f' (min_volume: {min_volume:,})' if min_volume else ''}..."
+        )
 
         while True:
-            # If we have a max_markets limit, only request what we need
-            if max_markets:
-                remaining = max_markets - len(all_markets)
-                if remaining <= 0:
-                    break
-                # Request at most the remaining amount, but respect API's max limit of 200
-                limit = min(remaining, 200)
-            else:
-                limit = 200
+            # Always request full pages to maximize efficiency
+            # We'll filter after fetching
+            limit = 200
 
             response = self.get_markets(status=status, cursor=cursor, limit=limit)
             markets = response.get("markets", [])
+            total_fetched += len(markets)
+
+            # Filter by volume if specified
+            if min_volume is not None:
+                filtered_markets = [m for m in markets if m.get("volume", 0) >= min_volume]
+                filtered_out = len(markets) - len(filtered_markets)
+                total_filtered_out += filtered_out
+                markets = filtered_markets
+                if filtered_out > 0:
+                    logger.debug(
+                        f"Filtered out {filtered_out} markets with volume < {min_volume:,}"
+                    )
+
             all_markets.extend(markets)
 
             cursor = response.get("cursor")
-            logger.debug(f"Fetched {len(markets)} markets, total so far: {len(all_markets)}")
+            logger.debug(
+                f"Fetched {len(markets)} markets (after filtering), "
+                f"total so far: {len(all_markets)}"
+            )
 
             # Stop if we've hit our limit or there's no more data
             if max_markets and len(all_markets) >= max_markets:
+                # Trim to exact limit
+                all_markets = all_markets[:max_markets]
                 logger.info(f"Reached max_markets limit of {max_markets}")
                 break
 
             if not cursor:
                 break
 
-        logger.info(f"Fetched total of {len(all_markets)} open markets")
+        if min_volume is not None:
+            logger.info(
+                f"Fetched {total_fetched} total markets, "
+                f"filtered to {len(all_markets)} with volume >= {min_volume:,} "
+                f"({total_filtered_out} filtered out)"
+            )
+        else:
+            logger.info(f"Fetched total of {len(all_markets)} markets")
+
         return all_markets
 
     def get_event(self, event_ticker: str) -> Dict:
