@@ -365,77 +365,87 @@ def main():
     print(f"Initializing Kalshi client...")
     client = KalshiDataClient()
 
-    # Fetch more markets initially since we'll filter out multivariate ones
-    fetch_limit = limit * 10  # Fetch 10x since many will be filtered
-    min_volume = None  # No volume filter - get all markets
-    print(f"Fetching up to {fetch_limit} markets...")
-    all_markets = client.get_all_open_markets(
-        max_markets=fetch_limit,
-        status="open",
-        min_volume=min_volume
-    )
-    print(f"{Fore.GREEN}✓ Fetched {len(all_markets)} markets{Style.RESET_ALL}")
+    # Paginate to find markets with liquidity
+    print(f"Searching for {limit} markets with orderbook liquidity...")
+    print(f"This may take a moment as we page through markets...\n")
 
-    # Filter out multivariate markets (they don't have orderbooks)
-    print(f"\nFiltering out multivariate markets (KXMV prefix)...")
-    multi_markets = [m for m in all_markets if m.get("ticker", "").startswith("KXMV")]
-    regular_markets = [m for m in all_markets if not m.get("ticker", "").startswith("KXMV")]
+    target_markets = limit
+    max_pages = 20
+    markets = []
+    cursor = None
+    pages_fetched = 0
+    total_fetched = 0
+    total_multivariate = 0
+    total_no_liquidity = 0
 
-    print(f"  Multivariate markets: {len(multi_markets)} (filtered out)")
-    print(f"  Regular markets: {len(regular_markets)}")
+    while len(markets) < target_markets and pages_fetched < max_pages:
+        pages_fetched += 1
+        print(f"Fetching page {pages_fetched}...")
 
-    if len(regular_markets) == 0:
-        print(f"\n{Fore.RED}ERROR: No regular (non-multivariate) markets found!{Style.RESET_ALL}")
-        print(f"All {len(all_markets)} markets are multivariate (KXMV), which don't support orderbooks.")
-        print(f"\nTry:")
-        print(f"  1. Removing or lowering the min_volume filter")
-        print(f"  2. Using 'settled' or 'closed' status to see historical markets")
-        sys.exit(1)
+        # Fetch a page
+        response = client.get_markets(status="open", limit=200, cursor=cursor)
+        page_markets = response.get("markets", [])
+        cursor = response.get("cursor")
+        total_fetched += len(page_markets)
 
-    # Take only the number requested
-    markets = regular_markets[:limit]
-    print(f"\n{Fore.GREEN}✓ Using {len(markets)} regular markets for analysis{Style.RESET_ALL}")
+        if not page_markets:
+            print(f"{Fore.YELLOW}No more markets available{Style.RESET_ALL}")
+            break
 
-    # Enrich with orderbook data
-    print(f"\nEnriching markets with orderbook data...")
-    enriched_markets = []
-    failed_count = 0
-    empty_orderbook_count = 0
+        print(f"  Retrieved {len(page_markets)} markets from API")
 
-    for i, market in enumerate(markets):
-        ticker = market.get("ticker")
-        try:
-            orderbook_response = client.get_orderbook(ticker)
-            orderbook = orderbook_response.get("orderbook", {})
+        # Process this page
+        for market in page_markets:
+            if len(markets) >= target_markets:
+                break
 
-            # Check if orderbook has actual data
-            yes_orders = orderbook.get("yes")
-            no_orders = orderbook.get("no")
+            ticker = market.get("ticker", "")
 
-            if yes_orders is None and no_orders is None:
-                empty_orderbook_count += 1
-                if empty_orderbook_count <= 3:
-                    print(f"{Fore.YELLOW}  Warning: Orderbook is null for {ticker}{Style.RESET_ALL}")
-            elif (not yes_orders or len(yes_orders) == 0) and (not no_orders or len(no_orders) == 0):
-                empty_orderbook_count += 1
+            # Skip multivariate
+            if ticker.startswith("KXMV"):
+                total_multivariate += 1
+                continue
 
-            market["orderbook"] = orderbook
-            enriched_markets.append(market)
+            # Fetch orderbook
+            try:
+                orderbook_response = client.get_orderbook(ticker)
+                orderbook = orderbook_response.get("orderbook", {})
+                market["orderbook"] = orderbook
 
-            if (i + 1) % 20 == 0:
-                print(f"  Fetched orderbooks for {i + 1}/{len(markets)} markets...")
-        except Exception as e:
-            failed_count += 1
-            if failed_count <= 3:  # Show first 3 failures
+                # Check for liquidity
+                yes_orders = orderbook.get("yes") or []
+                no_orders = orderbook.get("no") or []
+
+                has_liquidity = (
+                    (len(yes_orders) > 0 and any(o[0] > 0 for o in yes_orders)) or
+                    (len(no_orders) > 0 and any(o[0] > 0 for o in no_orders))
+                )
+
+                if not has_liquidity:
+                    total_no_liquidity += 1
+                    continue
+
+                # Good market!
+                markets.append(market)
+
+                if len(markets) % 5 == 0:
+                    print(f"{Fore.GREEN}  Found {len(markets)}/{target_markets} liquid markets{Style.RESET_ALL}")
+
+            except Exception as e:
                 print(f"{Fore.YELLOW}  Warning: Failed to fetch orderbook for {ticker}: {e}{Style.RESET_ALL}")
+                continue
 
-    print(f"{Fore.GREEN}✓ Enriched {len(enriched_markets)} markets with orderbook data{Style.RESET_ALL}")
-    if empty_orderbook_count > 0:
-        print(f"{Fore.YELLOW}  ({empty_orderbook_count} markets have empty/null orderbooks){Style.RESET_ALL}")
-    if failed_count > 0:
-        print(f"{Fore.RED}  ({failed_count} markets failed to fetch){Style.RESET_ALL}")
+        if not cursor:
+            print(f"{Fore.YELLOW}Reached end of available markets{Style.RESET_ALL}")
+            break
 
-    markets = enriched_markets
+    print(f"\n{Fore.GREEN}✓ Found {len(markets)} liquid markets{Style.RESET_ALL}")
+    print(f"  (Fetched {total_fetched} total, filtered {total_multivariate} multivariate, {total_no_liquidity} without liquidity)")
+
+    if len(markets) == 0:
+        print(f"\n{Fore.RED}ERROR: No liquid markets found!{Style.RESET_ALL}")
+        print(f"All markets were either multivariate or lacked orderbook liquidity.")
+        sys.exit(1)
 
     # Validate data
     validation = validate_market_data(markets)

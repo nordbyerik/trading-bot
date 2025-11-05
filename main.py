@@ -177,96 +177,143 @@ class MarketAnalysisOrchestrator:
         logger.info(f"Enabled {len(notifiers)} notifier(s)")
         return notifiers
 
+    def _has_liquidity(self, orderbook: Dict[str, Any], min_depth: int = 1) -> bool:
+        """
+        Check if an orderbook has actual liquidity.
+
+        Args:
+            orderbook: Orderbook dictionary
+            min_depth: Minimum number of orders on at least one side
+
+        Returns:
+            True if orderbook has liquidity, False otherwise
+        """
+        yes_orders = orderbook.get("yes") or []
+        no_orders = orderbook.get("no") or []
+
+        # Check if we have at least min_depth orders on either side
+        has_yes_liquidity = len(yes_orders) >= min_depth
+        has_no_liquidity = len(no_orders) >= min_depth
+
+        # Also check that bids aren't all zeros
+        if has_yes_liquidity:
+            has_yes_liquidity = any(order[0] > 0 for order in yes_orders[:min_depth])
+        if has_no_liquidity:
+            has_no_liquidity = any(order[0] > 0 for order in no_orders[:min_depth])
+
+        return has_yes_liquidity or has_no_liquidity
+
     def fetch_market_data(self) -> List[Dict[str, Any]]:
         """
-        Fetch market data with orderbooks.
+        Fetch market data with orderbooks, intelligently paginating to find
+        markets with actual liquidity.
 
         Returns:
             List of market dictionaries with embedded orderbook data
         """
-        logger.info("Fetching market data...")
+        logger.info("Fetching market data with liquidity filtering...")
 
-        # Fetch markets up to the configured limit
-        max_markets = self.config.get("max_markets_to_analyze", 100)
+        # Configuration
+        target_markets = self.config.get("max_markets_to_analyze", 25)
         market_status = self.config.get("market_status", "open")
-        min_volume = self.config.get("min_market_volume")
+        min_liquidity_depth = self.config.get("min_liquidity_depth", 1)
+        max_pages_to_fetch = self.config.get("max_pages_to_fetch", 20)  # Safety limit
 
-        markets = self.client.get_all_open_markets(
-            max_markets=max_markets,
-            status=market_status,
-            min_volume=min_volume
-        )
-        logger.info(f"Fetched {len(markets)} {market_status} markets")
-
-        # Filter out multivariate markets (they don't have orderbook depth data)
-        regular_markets = [
-            m for m in markets
-            if not m.get("ticker", "").startswith("KXMV")
-        ]
-        multi_markets = len(markets) - len(regular_markets)
-
-        if multi_markets > 0:
-            logger.info(
-                f"Filtered out {multi_markets} multivariate markets (no orderbook support)"
-            )
-
-        if len(regular_markets) == 0:
-            logger.warning(
-                "No regular markets found! All markets are multivariate. "
-                "Analyzers may not find any opportunities."
-            )
-            return []
-
-        logger.info(f"Processing {len(regular_markets)} regular markets")
-
-        # Fetch orderbooks for each market
         enriched_markets = []
-        empty_orderbook_count = 0
-
-        for i, market in enumerate(regular_markets):
-            ticker = market.get("ticker")
-
-            try:
-                orderbook_response = self.client.get_orderbook(ticker)
-                # Extract the actual orderbook data from the response wrapper
-                orderbook = orderbook_response.get("orderbook", {})
-                market["orderbook"] = orderbook
-
-                # Check if orderbook has actual data
-                yes_orders = orderbook.get("yes")
-                no_orders = orderbook.get("no")
-
-                if yes_orders is None and no_orders is None:
-                    empty_orderbook_count += 1
-                    logger.debug(f"Market {ticker} has null orderbook")
-                elif (not yes_orders or len(yes_orders) == 0) and (not no_orders or len(no_orders) == 0):
-                    empty_orderbook_count += 1
-                    logger.debug(f"Market {ticker} has empty orderbook")
-
-                # Extract series_ticker if not present (needed for candlestick fetching)
-                if not market.get("series_ticker") and ticker:
-                    # Series ticker is the first part before the first hyphen
-                    market["series_ticker"] = ticker.split("-")[0]
-
-                enriched_markets.append(market)
-
-                if (i + 1) % 20 == 0:
-                    logger.info(
-                        f"Fetched orderbooks for {i + 1}/{len(regular_markets)} markets"
-                    )
-
-            except Exception as e:
-                logger.warning(f"Failed to fetch orderbook for {ticker}: {e}")
-                continue
+        total_fetched = 0
+        total_multivariate = 0
+        total_no_liquidity = 0
+        cursor = None
+        pages_fetched = 0
 
         logger.info(
-            f"Successfully enriched {len(enriched_markets)} markets with orderbook data"
+            f"Target: {target_markets} markets with liquidity "
+            f"(max {max_pages_to_fetch} pages)"
         )
 
-        if empty_orderbook_count > 0:
+        while len(enriched_markets) < target_markets and pages_fetched < max_pages_to_fetch:
+            pages_fetched += 1
+
+            # Fetch a page of markets
+            logger.info(f"Fetching page {pages_fetched}...")
+            response = self.client.get_markets(
+                status=market_status,
+                limit=200,  # Fetch 200 per page
+                cursor=cursor
+            )
+
+            markets = response.get("markets", [])
+            cursor = response.get("cursor")
+            total_fetched += len(markets)
+
+            if not markets:
+                logger.info("No more markets available")
+                break
+
+            logger.info(f"Retrieved {len(markets)} markets from API (page {pages_fetched})")
+
+            # Filter and enrich markets
+            for market in markets:
+                # Already have enough?
+                if len(enriched_markets) >= target_markets:
+                    break
+
+                ticker = market.get("ticker", "")
+
+                # Skip multivariate markets (no orderbook support)
+                if ticker.startswith("KXMV"):
+                    total_multivariate += 1
+                    continue
+
+                # Fetch orderbook
+                try:
+                    orderbook_response = self.client.get_orderbook(ticker)
+                    orderbook = orderbook_response.get("orderbook", {})
+                    market["orderbook"] = orderbook
+
+                    # Check for liquidity
+                    if not self._has_liquidity(orderbook, min_liquidity_depth):
+                        total_no_liquidity += 1
+                        logger.debug(f"Skipping {ticker}: no liquidity")
+                        continue
+
+                    # Extract series_ticker if not present
+                    if not market.get("series_ticker") and ticker:
+                        market["series_ticker"] = ticker.split("-")[0]
+
+                    enriched_markets.append(market)
+
+                    if len(enriched_markets) % 5 == 0:
+                        logger.info(f"Found {len(enriched_markets)}/{target_markets} liquid markets")
+
+                except Exception as e:
+                    logger.warning(f"Failed to fetch orderbook for {ticker}: {e}")
+                    continue
+
+            # If cursor is None, we've reached the end
+            if not cursor:
+                logger.info("Reached end of available markets")
+                break
+
+        # Summary
+        logger.info(
+            f"Market fetching complete: "
+            f"Found {len(enriched_markets)} liquid markets "
+            f"(fetched {total_fetched} total, "
+            f"filtered {total_multivariate} multivariate, "
+            f"{total_no_liquidity} without liquidity)"
+        )
+
+        if len(enriched_markets) < target_markets:
             logger.warning(
-                f"{empty_orderbook_count} markets have empty/null orderbooks "
-                f"({empty_orderbook_count / len(enriched_markets) * 100:.1f}%)"
+                f"Only found {len(enriched_markets)}/{target_markets} target markets. "
+                f"May need to adjust filters or try a different time."
+            )
+
+        if len(enriched_markets) == 0:
+            logger.error(
+                "No tradeable markets found! All markets were either multivariate "
+                "or lacked orderbook liquidity."
             )
 
         return enriched_markets
