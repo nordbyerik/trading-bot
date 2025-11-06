@@ -46,6 +46,11 @@ class ThetaDecayAnalyzer(BaseAnalyzer):
             "soft_hours_to_expiration": 48.0,  # Look at markets expiring within N hours for soft
             "soft_price_tolerance": 0.20,  # Distance from 0 or 1 (20 cents) for soft
             "min_hours_remaining": 1.0,  # Don't flag markets too close to expiration
+
+            # Novice exploitation settings
+            "panic_zone_hours": 6.0,  # Final hours where novices panic sell/buy
+            "panic_multiplier": 2.0,  # Edge multiplier in panic zone
+            "dead_cat_bounce_threshold": 0.10,  # Detect 10%+ moves in final hours
         }
 
     def _setup(self) -> None:
@@ -171,15 +176,24 @@ class ThetaDecayAnalyzer(BaseAnalyzer):
         # Calculate distance from nearest boundary (0 or 1)
         distance_from_certainty = min(price, 1.0 - price)
 
+        # Check if we're in the panic zone (final hours where novices make mistakes)
+        in_panic_zone = hours_remaining <= self.config["panic_zone_hours"]
+
+        # Try to detect "dead cat bounce" - sudden moves against theta decay trend
+        dead_cat_bounce = self._detect_dead_cat_bounce(market, price, hours_remaining)
+
         # Determine confidence based on time remaining and price
         # Less time + more uncertain price = higher confidence opportunity
-        confidence = self._calculate_confidence(hours_remaining, distance_from_certainty)
+        confidence = self._calculate_confidence(
+            hours_remaining, distance_from_certainty, in_panic_zone, dead_cat_bounce
+        )
 
         # Calculate estimated edge
         # The edge is based on the assumption that the price should converge
         # The further from convergence with less time, the bigger the potential edge
+        # ENHANCED: Apply panic multiplier if in panic zone
         estimated_edge_cents = self._calculate_edge(
-            price, hours_remaining, distance_from_certainty
+            price, hours_remaining, distance_from_certainty, in_panic_zone
         )
 
         # Calculate as percentage
@@ -187,12 +201,25 @@ class ThetaDecayAnalyzer(BaseAnalyzer):
             (estimated_edge_cents / (price * 100)) * 100 if price > 0 else 0
         )
 
-        # Create reasoning
-        reasoning = (
+        # Create reasoning with novice behavior context
+        reasoning_parts = [
             f"Market expires in {hours_remaining:.1f}h but price is {price:.2f} "
-            f"(distance from certainty: {distance_from_certainty:.2f}). "
-            f"Slow theta decay suggests potential mispricing."
-        )
+            f"(distance from certainty: {distance_from_certainty:.2f})."
+        ]
+
+        if in_panic_zone:
+            reasoning_parts.append(
+                "IN PANIC ZONE: Novices likely to make irrational decisions in final hours."
+            )
+
+        if dead_cat_bounce:
+            reasoning_parts.append(
+                "DEAD CAT BOUNCE detected: Recent spike against theta decay trend - "
+                "exploit novice overreaction."
+            )
+
+        reasoning_parts.append("Slow theta decay suggests mispricing opportunity.")
+        reasoning = " ".join(reasoning_parts)
 
         # Build opportunity
         opportunity = Opportunity(
@@ -214,7 +241,10 @@ class ThetaDecayAnalyzer(BaseAnalyzer):
                 "expiration_time": expiration.isoformat(),
                 "distance_from_certainty": round(distance_from_certainty, 4),
                 "tolerance": tolerance,
+                "in_panic_zone": in_panic_zone,
+                "dead_cat_bounce": dead_cat_bounce,
                 "analysis_type": "theta_decay",
+                "exploit_type": "novice_time_decay_misunderstanding",
             },
         )
 
@@ -268,15 +298,23 @@ class ThetaDecayAnalyzer(BaseAnalyzer):
         return None
 
     def _calculate_confidence(
-        self, hours_remaining: float, distance_from_certainty: float
+        self,
+        hours_remaining: float,
+        distance_from_certainty: float,
+        in_panic_zone: bool,
+        dead_cat_bounce: bool
     ) -> ConfidenceLevel:
         """
         Calculate confidence level based on time and price.
 
         Less time + more uncertainty = higher confidence
+        ENHANCED: Panic zone and dead cat bounce boost confidence
         """
         # Score based on urgency (less time = higher score)
-        if hours_remaining < 6:
+        # EXPONENTIAL urgency in final hours
+        if hours_remaining < 3:
+            time_score = 4  # Extreme urgency
+        elif hours_remaining < 6:
             time_score = 3
         elif hours_remaining < 12:
             time_score = 2
@@ -293,35 +331,120 @@ class ThetaDecayAnalyzer(BaseAnalyzer):
 
         total_score = time_score + price_score
 
+        # Boost for novice exploitation signals
+        if in_panic_zone:
+            total_score += 1  # Novices panic in final hours
+
+        if dead_cat_bounce:
+            total_score += 1  # Irrational spike before expiration
+
         # Map combined score to confidence level
-        if total_score >= 5:
+        if total_score >= 6:
             return ConfidenceLevel.HIGH
-        elif total_score >= 3:
+        elif total_score >= 4:
             return ConfidenceLevel.MEDIUM
         else:
             return ConfidenceLevel.LOW
 
     def _calculate_edge(
-        self, price: float, hours_remaining: float, distance_from_certainty: float
+        self,
+        price: float,
+        hours_remaining: float,
+        distance_from_certainty: float,
+        in_panic_zone: bool
     ) -> float:
         """
         Calculate estimated edge in cents.
 
         This is a heuristic based on expected convergence.
+        ENHANCED: Exponential urgency and panic zone multiplier
         """
         # Base edge is the distance from certainty
         # The assumption is that the price should eventually converge
         base_edge = distance_from_certainty * 100  # Convert to cents
 
         # Scale by urgency (less time = bigger edge if it converges)
-        if hours_remaining < 6:
+        # EXPONENTIAL in final hours when novices panic
+        if hours_remaining < 3:
+            urgency_multiplier = 2.0  # Extreme urgency
+        elif hours_remaining < 6:
             urgency_multiplier = 1.5
         elif hours_remaining < 12:
             urgency_multiplier = 1.2
         else:
             urgency_multiplier = 1.0
 
-        return base_edge * urgency_multiplier
+        edge = base_edge * urgency_multiplier
+
+        # Apply panic multiplier if in panic zone
+        if in_panic_zone:
+            edge *= self.config["panic_multiplier"]
+
+        return edge
+
+    def _detect_dead_cat_bounce(
+        self, market: Dict[str, Any], current_price: float, hours_remaining: float
+    ) -> bool:
+        """
+        Detect if market is experiencing a "dead cat bounce" - an irrational spike
+        against the theta decay trend in final hours.
+
+        Novices often create short-lived price spikes before expiration due to:
+        - Last-minute news overreaction
+        - FOMO buying
+        - Panic selling that gets bought up
+
+        Returns True if dead cat bounce detected, False otherwise.
+        """
+        # Only check if close to expiration
+        if hours_remaining > 12:
+            return False
+
+        # Fetch recent price history
+        candlesticks = self._fetch_market_candlesticks(
+            market,
+            lookback_hours=min(24, int(hours_remaining) + 6),
+            period_interval=60  # 1-hour candles
+        )
+
+        if not candlesticks or len(candlesticks) < 3:
+            return False
+
+        prices = self._extract_prices_from_candlesticks(candlesticks, "yes_ask_close")
+
+        if not prices or len(prices) < 3:
+            return False
+
+        # Convert to fractions
+        prices = [p / 100.0 for p in prices]
+
+        # Check if recent price moved significantly against expected theta decay
+        # Expected: price should be converging to 0 or 1
+        # Dead cat bounce: price moved AWAY from nearest boundary
+
+        older_price = prices[-3]  # 2 hours ago
+        recent_price = prices[-1]  # Current
+
+        # Determine which boundary (0 or 1) price should converge to
+        target_boundary = 0.0 if older_price < 0.5 else 1.0
+
+        # Calculate distances
+        older_distance = abs(older_price - target_boundary)
+        recent_distance = abs(recent_price - target_boundary)
+
+        # Dead cat bounce: recent distance increased (moved away from convergence)
+        distance_increase = recent_distance - older_distance
+        distance_increase_pct = (distance_increase / older_distance * 100) if older_distance > 0 else 0
+
+        # Flag as dead cat bounce if moved away by threshold amount
+        if distance_increase_pct >= self.config["dead_cat_bounce_threshold"] * 100:
+            logger.info(
+                f"[THETA-DCB] {market.get('ticker')}: Dead cat bounce detected! "
+                f"Moved {distance_increase_pct:.1f}% away from convergence target"
+            )
+            return True
+
+        return False
 
 
 if __name__ == "__main__":
