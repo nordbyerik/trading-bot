@@ -30,6 +30,10 @@ from analyzers.rsi_analyzer import RSIAnalyzer
 from analyzers.bollinger_bands_analyzer import BollingerBandsAnalyzer
 from analyzers.macd_analyzer import MACDAnalyzer
 from analyzers.volume_trend_analyzer import VolumeTrendAnalyzer
+from analyzers.event_volatility_analyzer import EventVolatilityCrushAnalyzer
+from analyzers.recency_bias_analyzer import RecencyBiasAnalyzer
+from analyzers.psychological_level_analyzer import PsychologicalLevelAnalyzer
+from analyzers.liquidity_trap_analyzer import LiquidityTrapAnalyzer
 
 
 # Configure logging
@@ -53,6 +57,11 @@ ANALYZER_REGISTRY = {
     "bollinger_bands": BollingerBandsAnalyzer,
     "macd": MACDAnalyzer,
     "volume_trend": VolumeTrendAnalyzer,
+    # NEW: Novice exploitation analyzers
+    "event_volatility": EventVolatilityCrushAnalyzer,
+    "recency_bias": RecencyBiasAnalyzer,
+    "psychological_levels": PsychologicalLevelAnalyzer,
+    "liquidity_trap": LiquidityTrapAnalyzer,
 }
 
 
