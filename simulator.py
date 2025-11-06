@@ -27,6 +27,10 @@ from analyzers.correlation_analyzer import CorrelationAnalyzer
 from analyzers.imbalance_analyzer import ImbalanceAnalyzer
 from analyzers.theta_decay_analyzer import ThetaDecayAnalyzer
 from analyzers.volume_trend_analyzer import VolumeTrendAnalyzer
+from analyzers.event_volatility_analyzer import EventVolatilityCrushAnalyzer
+from analyzers.recency_bias_analyzer import RecencyBiasAnalyzer
+from analyzers.psychological_level_analyzer import PsychologicalLevelAnalyzer
+from analyzers.liquidity_trap_analyzer import LiquidityTrapAnalyzer
 
 
 logger = logging.getLogger(__name__)
@@ -46,6 +50,11 @@ ANALYZER_REGISTRY = {
     "bollinger_bands": BollingerBandsAnalyzer,
     "macd": MACDAnalyzer,
     "volume_trend": VolumeTrendAnalyzer,
+    # Novice exploitation analyzers
+    "event_volatility": EventVolatilityCrushAnalyzer,
+    "recency_bias": RecencyBiasAnalyzer,
+    "psychological_levels": PsychologicalLevelAnalyzer,
+    "liquidity_trap": LiquidityTrapAnalyzer,
 }
 
 
