@@ -197,8 +197,9 @@ class BaseAnalyzer(ABC):
             return None
 
         # Bids are [price_in_cents, quantity]
-        # They should already be sorted with best price first
-        return (bids[0][0], bids[0][1])
+        # Kalshi returns bids sorted in ASCENDING order (lowest first)
+        # Best bid (highest price) is the LAST element
+        return (bids[-1][0], bids[-1][1])
 
     def _calculate_spread(self, yes_bid: float, no_bid: float) -> float:
         """
