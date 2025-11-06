@@ -2,17 +2,23 @@
 Kalshi API Data Client
 
 Handles all interactions with the Kalshi API for fetching market data.
-No authentication required for public market data endpoints.
+Supports both public endpoints (no auth) and authenticated endpoints (RSA signatures).
 """
 
 import logging
 import time
 import threading
+import base64
+import os
+import datetime
 from typing import Any, Dict, List, Optional
 from functools import lru_cache
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.backends import default_backend
 
 
 logger = logging.getLogger(__name__)
@@ -83,7 +89,9 @@ class KalshiDataClient:
         cache_ttl: int = 30,
         rate_limit: float = 20.0,
         rate_limit_burst: float = None,
-        max_retries: int = 3
+        max_retries: int = 3,
+        api_key_id: Optional[str] = None,
+        private_key_b64: Optional[str] = None
     ):
         """
         Initialize the Kalshi data client.
@@ -93,6 +101,8 @@ class KalshiDataClient:
             rate_limit: Maximum requests per second (default: 20.0)
             rate_limit_burst: Maximum burst capacity (default: same as rate_limit)
             max_retries: Maximum number of retry attempts for failed requests
+            api_key_id: Kalshi API key ID (optional, for authenticated requests)
+            private_key_b64: Base64-encoded RSA private key (optional, for authenticated requests)
         """
         self.cache_ttl = cache_ttl
         self.rate_limiter = TokenBucketRateLimiter(
@@ -100,13 +110,20 @@ class KalshiDataClient:
             capacity=rate_limit_burst
         )
 
+        # Authentication credentials
+        self.api_key_id = api_key_id
+        self.private_key = None
+        if private_key_b64:
+            self.private_key = self._load_private_key(private_key_b64)
+            logger.info("RSA authentication enabled")
+
         # Set up session with retry logic
         self.session = requests.Session()
         retry_strategy = Retry(
             total=max_retries,
             backoff_factor=1,
             status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["GET"]
+            allowed_methods=["GET", "POST", "PUT", "DELETE"]
         )
         adapter = HTTPAdapter(max_retries=retry_strategy)
         self.session.mount("http://", adapter)
@@ -116,6 +133,97 @@ class KalshiDataClient:
         self._cache: Dict[str, tuple[Any, float]] = {}
 
         logger.info("KalshiDataClient initialized")
+
+    def _load_private_key(self, private_key_b64: str):
+        """
+        Load RSA private key from base64-encoded PEM string.
+
+        Args:
+            private_key_b64: Base64-encoded private key in PEM format
+
+        Returns:
+            Private key object
+        """
+        try:
+            # Decode from base64
+            private_key_pem = base64.b64decode(private_key_b64).decode('utf-8')
+
+            # Load as a private key object
+            private_key = serialization.load_pem_private_key(
+                private_key_pem.encode(),
+                password=None,
+                backend=default_backend()
+            )
+
+            logger.info("Successfully loaded RSA private key")
+            return private_key
+        except Exception as e:
+            logger.error(f"Failed to load private key: {e}")
+            raise
+
+    def _create_signature(self, timestamp: str, method: str, path: str) -> str:
+        """
+        Create RSA-PSS signature for Kalshi API authentication.
+
+        Args:
+            timestamp: Current timestamp in milliseconds
+            method: HTTP method (GET, POST, etc.)
+            path: API endpoint path WITHOUT query parameters
+
+        Returns:
+            Base64-encoded signature string
+        """
+        if not self.private_key:
+            raise ValueError("Private key not loaded. Cannot create signature.")
+
+        # CRITICAL: Strip query parameters before signing
+        path_without_query = path.split('?')[0]
+
+        # Create message to sign: timestamp + method + path
+        message = f"{timestamp}{method}{path_without_query}".encode('utf-8')
+
+        # Sign with RSA-PSS (not PKCS1v15!)
+        signature = self.private_key.sign(
+            message,
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.DIGEST_LENGTH
+            ),
+            hashes.SHA256()
+        )
+
+        # Base64 encode the signature
+        return base64.b64encode(signature).decode('utf-8')
+
+    def _get_auth_headers(self, method: str, endpoint: str) -> Dict[str, str]:
+        """
+        Generate authentication headers for Kalshi API requests.
+
+        Args:
+            method: HTTP method
+            endpoint: API endpoint path (will be converted to full path for signing)
+
+        Returns:
+            Dictionary of authentication headers
+        """
+        if not self.api_key_id or not self.private_key:
+            return {}
+
+        # Generate timestamp in milliseconds (not seconds!)
+        timestamp = str(int(datetime.datetime.now().timestamp() * 1000))
+
+        # For signature, we need the full path including /trade-api/v2
+        # The endpoint passed here doesn't include the base path
+        full_path = f"/trade-api/v2{endpoint}"
+
+        # Create signature using the full path
+        signature = self._create_signature(timestamp, method, full_path)
+
+        return {
+            'KALSHI-ACCESS-KEY': self.api_key_id,
+            'KALSHI-ACCESS-SIGNATURE': signature,
+            'KALSHI-ACCESS-TIMESTAMP': timestamp
+        }
 
     def _rate_limit(self) -> None:
         """Enforce rate limiting using token bucket algorithm."""
@@ -137,13 +245,23 @@ class KalshiDataClient:
         """Store data in cache with current timestamp."""
         self._cache[key] = (data, time.time())
 
-    def _make_request(self, endpoint: str, params: Optional[Dict] = None) -> Dict:
+    def _make_request(
+        self,
+        endpoint: str,
+        params: Optional[Dict] = None,
+        method: str = "GET",
+        json_data: Optional[Dict] = None,
+        use_auth: bool = False
+    ) -> Dict:
         """
-        Make an HTTP GET request to the Kalshi API.
+        Make an HTTP request to the Kalshi API.
 
         Args:
             endpoint: API endpoint path (e.g., '/markets')
             params: Query parameters
+            method: HTTP method (GET, POST, PUT, DELETE)
+            json_data: JSON payload for POST/PUT requests
+            use_auth: Whether to include authentication headers
 
         Returns:
             JSON response as dictionary
@@ -152,30 +270,53 @@ class KalshiDataClient:
             requests.RequestException: If the request fails
         """
         url = f"{self.BASE_URL}{endpoint}"
-        cache_key = f"{url}?{params}" if params else url
+        cache_key = f"{method}:{url}?{params}" if params else f"{method}:{url}"
 
-        # Check cache first
-        cached_data = self._get_from_cache(cache_key)
-        if cached_data is not None:
-            return cached_data
+        # Only cache GET requests
+        if method == "GET":
+            cached_data = self._get_from_cache(cache_key)
+            if cached_data is not None:
+                return cached_data
 
         # Rate limit
         self._rate_limit()
 
+        # Prepare headers
+        headers = {}
+        if use_auth:
+            auth_headers = self._get_auth_headers(method, endpoint)
+            headers.update(auth_headers)
+            logger.debug(f"Using authentication for {method} {endpoint}")
+
         try:
-            logger.debug(f"Making request to {endpoint} with params {params}")
-            response = self.session.get(url, params=params, timeout=10)
+            logger.debug(f"Making {method} request to {endpoint} with params {params}")
+
+            # Make the appropriate HTTP request
+            if method == "GET":
+                response = self.session.get(url, params=params, headers=headers, timeout=10)
+            elif method == "POST":
+                response = self.session.post(url, json=json_data, params=params, headers=headers, timeout=10)
+            elif method == "PUT":
+                response = self.session.put(url, json=json_data, params=params, headers=headers, timeout=10)
+            elif method == "DELETE":
+                response = self.session.delete(url, params=params, headers=headers, timeout=10)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
+
             response.raise_for_status()
 
             data = response.json()
 
-            # Cache the response
-            self._put_in_cache(cache_key, data)
+            # Cache GET responses only
+            if method == "GET":
+                self._put_in_cache(cache_key, data)
 
             return data
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"Request failed for {endpoint}: {e}")
+            logger.error(f"{method} request failed for {endpoint}: {e}")
+            if hasattr(e.response, 'text'):
+                logger.error(f"Response body: {e.response.text}")
             raise
 
     def get_series(self, series_ticker: str) -> Dict:
@@ -319,19 +460,20 @@ class KalshiDataClient:
         endpoint = f"/events/{event_ticker}"
         return self._make_request(endpoint)
 
-    def get_orderbook(self, market_ticker: str) -> Dict:
+    def get_orderbook(self, market_ticker: str, use_auth: bool = False) -> Dict:
         """
         Get orderbook for a specific market.
 
         Args:
             market_ticker: Market ticker symbol
+            use_auth: Whether to use authentication (some orderbooks may require it)
 
         Returns:
             Orderbook data with 'yes' and 'no' bid arrays
             Each bid is [price_in_cents, quantity]
         """
         endpoint = f"/markets/{market_ticker}/orderbook"
-        return self._make_request(endpoint)
+        return self._make_request(endpoint, use_auth=use_auth)
 
     def get_market(self, market_ticker: str) -> Dict:
         """
@@ -475,6 +617,165 @@ class KalshiDataClient:
             Dictionary containing list of announcements
         """
         return self._make_request("/exchange/announcements")
+
+    def get_balance(self) -> Dict:
+        """
+        Get portfolio balance (requires authentication).
+
+        Returns:
+            Dictionary containing balance information
+        """
+        if not self.api_key_id or not self.private_key:
+            raise ValueError("Authentication required. Initialize client with api_key_id and private_key_b64.")
+
+        endpoint = "/portfolio/balance"
+        return self._make_request(endpoint, use_auth=True)
+
+    def get_portfolio(self) -> Dict:
+        """
+        Get full portfolio information (requires authentication).
+
+        Returns:
+            Dictionary containing portfolio positions and settlements
+        """
+        if not self.api_key_id or not self.private_key:
+            raise ValueError("Authentication required. Initialize client with api_key_id and private_key_b64.")
+
+        endpoint = "/portfolio"
+        return self._make_request(endpoint, use_auth=True)
+
+    def get_fills(self, ticker: Optional[str] = None, limit: int = 100) -> Dict:
+        """
+        Get fill history (requires authentication).
+
+        Args:
+            ticker: Optional market ticker to filter fills
+            limit: Maximum number of results
+
+        Returns:
+            Dictionary containing fills history
+        """
+        if not self.api_key_id or not self.private_key:
+            raise ValueError("Authentication required. Initialize client with api_key_id and private_key_b64.")
+
+        endpoint = "/portfolio/fills"
+        params = {"limit": limit}
+        if ticker:
+            params["ticker"] = ticker
+
+        return self._make_request(endpoint, params=params, use_auth=True)
+
+    def get_orders(self, ticker: Optional[str] = None, status: Optional[str] = None) -> Dict:
+        """
+        Get orders (requires authentication).
+
+        Args:
+            ticker: Optional market ticker to filter orders
+            status: Optional status filter (resting, canceled, executed)
+
+        Returns:
+            Dictionary containing orders
+        """
+        if not self.api_key_id or not self.private_key:
+            raise ValueError("Authentication required. Initialize client with api_key_id and private_key_b64.")
+
+        endpoint = "/portfolio/orders"
+        params = {}
+        if ticker:
+            params["ticker"] = ticker
+        if status:
+            params["status"] = status
+
+        return self._make_request(endpoint, params=params, use_auth=True)
+
+    def create_order(
+        self,
+        ticker: str,
+        action: str,
+        side: str,
+        count: int,
+        type: str = "limit",
+        yes_price: Optional[int] = None,
+        no_price: Optional[int] = None,
+        expiration_ts: Optional[int] = None
+    ) -> Dict:
+        """
+        Create a new order (requires authentication).
+
+        Args:
+            ticker: Market ticker symbol
+            action: 'buy' or 'sell'
+            side: 'yes' or 'no'
+            count: Number of contracts
+            type: Order type ('limit' or 'market')
+            yes_price: Price in cents for yes side (required for limit orders)
+            no_price: Price in cents for no side (required for limit orders)
+            expiration_ts: Optional expiration timestamp
+
+        Returns:
+            Dictionary containing order details
+        """
+        if not self.api_key_id or not self.private_key:
+            raise ValueError("Authentication required. Initialize client with api_key_id and private_key_b64.")
+
+        order_data = {
+            "ticker": ticker,
+            "action": action,
+            "side": side,
+            "count": count,
+            "type": type
+        }
+
+        if yes_price is not None:
+            order_data["yes_price"] = yes_price
+        if no_price is not None:
+            order_data["no_price"] = no_price
+        if expiration_ts is not None:
+            order_data["expiration_ts"] = expiration_ts
+
+        endpoint = "/portfolio/orders"
+        return self._make_request(endpoint, method="POST", json_data=order_data, use_auth=True)
+
+    def cancel_order(self, order_id: str) -> Dict:
+        """
+        Cancel an existing order (requires authentication).
+
+        Args:
+            order_id: Order ID to cancel
+
+        Returns:
+            Dictionary containing cancellation details
+        """
+        if not self.api_key_id or not self.private_key:
+            raise ValueError("Authentication required. Initialize client with api_key_id and private_key_b64.")
+
+        endpoint = f"/portfolio/orders/{order_id}"
+        return self._make_request(endpoint, method="DELETE", use_auth=True)
+
+    @classmethod
+    def from_env(cls, **kwargs) -> 'KalshiDataClient':
+        """
+        Create a client using credentials from environment variables.
+
+        Expects:
+            KALSHI_API_KEY_ID: API key ID
+            KALSHI_PRIV_KEY: Base64-encoded private key
+
+        Args:
+            **kwargs: Additional arguments to pass to __init__
+
+        Returns:
+            Initialized KalshiDataClient with authentication
+        """
+        api_key_id = os.environ.get('KALSHI_API_KEY_ID')
+        private_key_b64 = os.environ.get('KALSHI_PRIV_KEY')
+
+        if not api_key_id or not private_key_b64:
+            raise ValueError(
+                "Missing required environment variables: KALSHI_API_KEY_ID and/or KALSHI_PRIV_KEY"
+            )
+
+        return cls(api_key_id=api_key_id, private_key_b64=private_key_b64, **kwargs)
 
     def clear_cache(self) -> None:
         """Clear all cached data."""
