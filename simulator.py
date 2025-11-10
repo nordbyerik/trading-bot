@@ -34,6 +34,7 @@ from analyzers.liquidity_trap_analyzer import LiquidityTrapAnalyzer
 from analyzers.value_bet_analyzer import ValueBetAnalyzer
 from analyzers.trend_follower_analyzer import TrendFollowerAnalyzer
 from analyzers.mean_reversion_analyzer import MeanReversionAnalyzer
+from analyzers.volume_surge_analyzer import VolumeSurgeAnalyzer
 
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ ANALYZER_REGISTRY = {
     "value_bet": ValueBetAnalyzer,
     "trend_follower": TrendFollowerAnalyzer,
     "mean_reversion": MeanReversionAnalyzer,
+    "volume_surge": VolumeSurgeAnalyzer,
 }
 
 
