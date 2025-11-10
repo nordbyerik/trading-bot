@@ -1,67 +1,66 @@
 #!/usr/bin/env python3
-"""
-Test if authentication is required/helpful for orderbook data
-"""
+"""Test orderbook fetching with authentication"""
 
 import logging
-import json
 from kalshi_client import KalshiDataClient
 
-logging.basicConfig(level=logging.WARNING)
+logging.basicConfig(level=logging.INFO)
 
-# Test with authenticated client
-print("=" * 80)
-print("TESTING ORDERBOOK ACCESS WITH AND WITHOUT AUTHENTICATION")
-print("=" * 80)
+# Create client with authentication
+client = KalshiDataClient.from_env()
 
-auth_client = KalshiDataClient.from_env()
-public_client = KalshiDataClient()
+print("Fetching markets with volume...")
+markets = client.get_all_open_markets(max_markets=10, status="open", min_volume=100)
+print(f"Found {len(markets)} markets\n")
 
-# Get a market
-print("\nFetching a market...")
-markets = auth_client.get_all_open_markets(max_markets=10, min_volume=100)
+found_orderbooks = 0
+for i, market in enumerate(markets[:5]):
+    ticker = market.get("ticker")
+    title = market.get("title", "")
+    volume = market.get("volume", 0)
 
-if not markets:
-    print("No markets found")
-else:
-    ticker = markets[0]['ticker']
-    print(f"Testing with: {ticker}")
-    print(f"Market yes_bid from API: {markets[0].get('yes_bid')}¢")
-    print(f"Market no_bid from API: {markets[0].get('no_bid')}¢")
+    print(f"\n{'='*80}")
+    print(f"Market {i+1}: {ticker}")
+    print(f"Title: {title[:50]}...")
+    print(f"Volume: {volume}")
 
-    print("\n" + "-" * 80)
-    print("1. ORDERBOOK WITH AUTHENTICATION:")
-    print("-" * 80)
+    # Try WITHOUT auth first
     try:
-        orderbook_auth = auth_client.get_orderbook(ticker, use_auth=True)
-        print(json.dumps(orderbook_auth, indent=2))
-    except Exception as e:
-        print(f"ERROR: {e}")
+        orderbook_response = client.get_orderbook(ticker, use_auth=False)
+        orderbook = orderbook_response.get("orderbook", {})
+        yes_orders = orderbook.get("yes")
+        no_orders = orderbook.get("no")
 
-    print("\n" + "-" * 80)
-    print("2. ORDERBOOK WITHOUT AUTHENTICATION:")
-    print("-" * 80)
+        if yes_orders and no_orders:
+            found_orderbooks += 1
+            print(f"✓ Orderbook (NO AUTH): YES={len(yes_orders)} orders, NO={len(no_orders)} orders")
+            if yes_orders:
+                print(f"  Best YES: {yes_orders[0][0]}¢ x {yes_orders[0][1]}")
+            if no_orders:
+                print(f"  Best NO: {no_orders[0][0]}¢ x {no_orders[0][1]}")
+        else:
+            print(f"✗ Orderbook (NO AUTH): Empty (yes={yes_orders}, no={no_orders})")
+    except Exception as e:
+        print(f"✗ Error (NO AUTH): {e}")
+
+    # Try WITH auth
     try:
-        orderbook_public = public_client.get_orderbook(ticker, use_auth=False)
-        print(json.dumps(orderbook_public, indent=2))
+        orderbook_response = client.get_orderbook(ticker, use_auth=True)
+        orderbook = orderbook_response.get("orderbook", {})
+        yes_orders = orderbook.get("yes")
+        no_orders = orderbook.get("no")
+
+        if yes_orders and no_orders:
+            found_orderbooks += 1
+            print(f"✓ Orderbook (WITH AUTH): YES={len(yes_orders)} orders, NO={len(no_orders)} orders")
+            if yes_orders:
+                print(f"  Best YES: {yes_orders[0][0]}¢ x {yes_orders[0][1]}")
+            if no_orders:
+                print(f"  Best NO: {no_orders[0][0]}¢ x {no_orders[0][1]}")
+        else:
+            print(f"✗ Orderbook (WITH AUTH): Empty (yes={yes_orders}, no={no_orders})")
     except Exception as e:
-        print(f"ERROR: {e}")
+        print(f"✗ Error (WITH AUTH): {e}")
 
-    print("\n" + "=" * 80)
-    print("COMPARISON:")
-    print("=" * 80)
-
-    auth_ob = orderbook_auth.get('orderbook', {})
-    pub_ob = orderbook_public.get('orderbook', {})
-
-    print(f"Authenticated YES bids: {auth_ob.get('yes')}")
-    print(f"Public YES bids: {pub_ob.get('yes')}")
-    print(f"\nAuthenticated NO bids: {auth_ob.get('no')}")
-    print(f"Public NO bids: {pub_ob.get('no')}")
-
-    if auth_ob == pub_ob:
-        print("\n✓ Same data with and without auth")
-        if auth_ob.get('yes') is None and auth_ob.get('no') is None:
-            print("  → This market has NO ORDERBOOK DATA (empty/inactive)")
-    else:
-        print("\n⚡ DIFFERENT data with auth!")
+print(f"\n{'='*80}")
+print(f"Found {found_orderbooks} orderbooks with data out of {min(5, len(markets))} markets checked")

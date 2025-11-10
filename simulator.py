@@ -31,6 +31,9 @@ from analyzers.event_volatility_analyzer import EventVolatilityCrushAnalyzer
 from analyzers.recency_bias_analyzer import RecencyBiasAnalyzer
 from analyzers.psychological_level_analyzer import PsychologicalLevelAnalyzer
 from analyzers.liquidity_trap_analyzer import LiquidityTrapAnalyzer
+from analyzers.value_bet_analyzer import ValueBetAnalyzer
+from analyzers.trend_follower_analyzer import TrendFollowerAnalyzer
+from analyzers.mean_reversion_analyzer import MeanReversionAnalyzer
 
 
 logger = logging.getLogger(__name__)
@@ -55,6 +58,9 @@ ANALYZER_REGISTRY = {
     "recency_bias": RecencyBiasAnalyzer,
     "psychological_levels": PsychologicalLevelAnalyzer,
     "liquidity_trap": LiquidityTrapAnalyzer,
+    "value_bet": ValueBetAnalyzer,
+    "trend_follower": TrendFollowerAnalyzer,
+    "mean_reversion": MeanReversionAnalyzer,
 }
 
 
@@ -180,6 +186,53 @@ class TradingSimulator:
 
         logger.debug(f"Portfolio snapshot: ${snapshot.portfolio_value/100:.2f}")
 
+    def _create_synthetic_orderbook(self, market: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a synthetic orderbook from last_price when real orderbook is empty.
+
+        Args:
+            market: Market dictionary with last_price
+
+        Returns:
+            Synthetic orderbook dict with yes and no arrays
+        """
+        last_price = market.get("last_price")
+        volume = market.get("volume", 0)
+
+        # If no last_price, we can't create synthetic orderbook
+        if last_price is None:
+            return {"yes": None, "no": None}
+
+        # Add some spread around the last price to simulate orderbook
+        # Use a tighter spread for higher volume markets
+        if volume > 10000:
+            spread = 2  # 2 cent spread for high volume
+        elif volume > 1000:
+            spread = 3  # 3 cent spread for medium volume
+        else:
+            spread = 5  # 5 cent spread for low volume
+
+        # Calculate synthetic bids
+        # last_price is typically the YES price
+        yes_price = last_price
+        no_price = 100 - last_price
+
+        # Create synthetic bid/ask with spread
+        yes_bid = max(1, yes_price - spread // 2)
+        yes_ask = min(99, yes_price + spread // 2)
+        no_bid = max(1, no_price - spread // 2)
+        no_ask = min(99, no_price + spread // 2)
+
+        # Use volume to estimate orderbook depth (quantity)
+        # Higher volume = more depth
+        base_qty = max(10, volume // 100)
+
+        # Create orderbook arrays: [[price, quantity], ...]
+        return {
+            "yes": [[yes_bid, base_qty], [yes_bid - 1, base_qty // 2]],
+            "no": [[no_bid, base_qty], [no_bid - 1, base_qty // 2]],
+        }
+
     def _fetch_markets_with_orderbooks(self) -> List[Dict[str, Any]]:
         """
         Fetch markets with orderbook data.
@@ -189,21 +242,39 @@ class TradingSimulator:
         """
         logger.info("Fetching market data...")
 
-        # Fetch markets
+        # Fetch markets with minimum volume to ensure liquid markets
         markets = self.client.get_all_open_markets(
             max_markets=self.config.max_markets,
-            status=self.config.market_status
+            status=self.config.market_status,
+            min_volume=10  # Filter for markets with at least some volume
         )
         logger.info(f"Fetched {len(markets)} markets")
 
+        # Filter out markets with no last_price (untradable)
+        markets_with_price = [m for m in markets if m.get("last_price") is not None and m.get("last_price") > 0]
+        logger.info(f"Filtered to {len(markets_with_price)} markets with valid prices")
+        markets = markets_with_price
+
         # Enrich with orderbooks
         enriched_markets = []
+        synthetic_count = 0
+
         for i, market in enumerate(markets):
             ticker = market.get("ticker")
 
             try:
                 orderbook_response = self.client.get_orderbook(ticker)
-                market["orderbook"] = orderbook_response.get("orderbook", {})
+                orderbook = orderbook_response.get("orderbook", {})
+
+                # Check if orderbook is empty (yes/no are None)
+                if orderbook.get("yes") is None or orderbook.get("no") is None:
+                    # Create synthetic orderbook from last_price
+                    synthetic_orderbook = self._create_synthetic_orderbook(market)
+                    market["orderbook"] = synthetic_orderbook
+                    if synthetic_orderbook.get("yes") is not None:
+                        synthetic_count += 1
+                else:
+                    market["orderbook"] = orderbook
 
                 # Extract series_ticker if not present
                 if not market.get("series_ticker") and ticker:
@@ -216,9 +287,18 @@ class TradingSimulator:
 
             except Exception as e:
                 logger.debug(f"Failed to fetch orderbook for {ticker}: {e}")
-                continue
+                # Try to create synthetic orderbook even if fetch fails
+                try:
+                    synthetic_orderbook = self._create_synthetic_orderbook(market)
+                    if synthetic_orderbook.get("yes") is not None:
+                        market["orderbook"] = synthetic_orderbook
+                        market["series_ticker"] = ticker.split("-")[0] if ticker else None
+                        enriched_markets.append(market)
+                        synthetic_count += 1
+                except:
+                    continue
 
-        logger.info(f"Enriched {len(enriched_markets)} markets with orderbooks")
+        logger.info(f"Enriched {len(enriched_markets)} markets with orderbooks ({synthetic_count} synthetic)")
         return enriched_markets
 
     def _extract_market_prices(self, markets: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
