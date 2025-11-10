@@ -460,20 +460,37 @@ class KalshiDataClient:
         endpoint = f"/events/{event_ticker}"
         return self._make_request(endpoint)
 
-    def get_orderbook(self, market_ticker: str, use_auth: bool = False) -> Dict:
+    def get_orderbook(self, market_ticker: str, use_auth: bool = False, depth: int = 0) -> Dict:
         """
         Get orderbook for a specific market.
 
         Args:
             market_ticker: Market ticker symbol
             use_auth: Whether to use authentication (some orderbooks may require it)
+            depth: Orderbook depth (0 or negative for all levels, 1-100 for specific depth)
 
         Returns:
             Orderbook data with 'yes' and 'no' bid arrays
             Each bid is [price_in_cents, quantity]
+            Note: Returns empty lists for yes/no when orderbook is null (no active orders)
         """
         endpoint = f"/markets/{market_ticker}/orderbook"
-        return self._make_request(endpoint, use_auth=use_auth)
+        params = {}
+        if depth != 0:
+            params["depth"] = depth
+
+        response = self._make_request(endpoint, params=params if params else None, use_auth=use_auth)
+
+        # Handle the nested orderbook structure and null values
+        orderbook = response.get("orderbook", {})
+        if orderbook:
+            # Convert null values to empty lists for easier handling
+            if orderbook.get("yes") is None:
+                orderbook["yes"] = []
+            if orderbook.get("no") is None:
+                orderbook["no"] = []
+
+        return response
 
     def get_market(self, market_ticker: str) -> Dict:
         """
