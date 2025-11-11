@@ -35,6 +35,8 @@ from analyzers.value_bet_analyzer import ValueBetAnalyzer
 from analyzers.trend_follower_analyzer import TrendFollowerAnalyzer
 from analyzers.mean_reversion_analyzer import MeanReversionAnalyzer
 from analyzers.volume_surge_analyzer import VolumeSurgeAnalyzer
+from analyzers.orderbook_depth_analyzer import OrderbookDepthAnalyzer
+from analyzers.price_extreme_reversion_analyzer import PriceExtremeReversionAnalyzer
 
 
 logger = logging.getLogger(__name__)
@@ -63,6 +65,10 @@ ANALYZER_REGISTRY = {
     "trend_follower": TrendFollowerAnalyzer,
     "mean_reversion": MeanReversionAnalyzer,
     "volume_surge": VolumeSurgeAnalyzer,
+    # Orderbook-based analyzers
+    "orderbook_depth": OrderbookDepthAnalyzer,
+    # Price-based analyzers
+    "price_extreme_reversion": PriceExtremeReversionAnalyzer,
 }
 
 

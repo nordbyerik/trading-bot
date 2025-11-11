@@ -272,16 +272,42 @@ class BaseAnalyzer(ABC):
 
         Args:
             candlesticks: List of candlestick dictionaries
-            price_field: Which price field to extract (yes_ask_close, yes_ask_open, etc.)
+            price_field: Which price field to extract. Options:
+                - "yes_ask_close": YES ask closing price (nested: yes_ask.close)
+                - "yes_bid_close": YES bid closing price (nested: yes_bid.close)
+                - "price_close": Trade price close (nested: price.close)
 
         Returns:
             List of prices in chronological order
         """
         prices = []
+
+        # Map field names to nested paths in candlestick structure
+        field_map = {
+            "yes_ask_close": ("yes_ask", "close"),
+            "yes_bid_close": ("yes_bid", "close"),
+            "yes_ask_open": ("yes_ask", "open"),
+            "yes_bid_open": ("yes_bid", "open"),
+            "price_close": ("price", "close"),
+            "price_open": ("price", "open"),
+        }
+
         for candle in candlesticks:
-            price = candle.get(price_field)
+            price = None
+
+            # Check if this is a nested field
+            if price_field in field_map:
+                parent_key, child_key = field_map[price_field]
+                parent = candle.get(parent_key)
+                if parent and isinstance(parent, dict):
+                    price = parent.get(child_key)
+            else:
+                # Try direct access for backwards compatibility
+                price = candle.get(price_field)
+
             if price is not None:
                 prices.append(float(price))
+
         return prices
 
     def _extract_volumes_from_candlesticks(self, candlesticks: List[Dict[str, Any]]) -> List[float]:

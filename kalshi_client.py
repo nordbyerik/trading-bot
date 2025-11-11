@@ -460,20 +460,81 @@ class KalshiDataClient:
         endpoint = f"/events/{event_ticker}"
         return self._make_request(endpoint)
 
-    def get_orderbook(self, market_ticker: str, use_auth: bool = False) -> Dict:
+    def get_events(
+        self,
+        status: Optional[str] = None,
+        with_nested_markets: bool = False,
+        with_milestones: bool = False,
+        limit: int = 200,
+        cursor: Optional[str] = None
+    ) -> Dict:
+        """
+        Get events with optional filters.
+
+        This is useful for finding long-lived markets (elections, predictions, etc.)
+        that have sufficient historical data for technical analysis.
+
+        Args:
+            status: Filter by status ('open', 'closed', 'settled'). None = any status
+            with_nested_markets: Include full market data nested in each event
+            with_milestones: Include milestone data for each event
+            limit: Number of results per page (max 200)
+            cursor: Pagination cursor from previous response
+
+        Returns:
+            Dictionary with 'events' list and optional 'cursor' for pagination
+
+        Example:
+            # Find open events with their markets
+            response = client.get_events(status='open', with_nested_markets=True)
+            for event in response['events']:
+                print(f"{event['event_ticker']}: {len(event.get('markets', []))} markets")
+        """
+        endpoint = "/events"
+        params = {"limit": limit}
+
+        if status:
+            params["status"] = status
+        if with_nested_markets:
+            params["with_nested_markets"] = True
+        if with_milestones:
+            params["with_milestones"] = True
+        if cursor:
+            params["cursor"] = cursor
+
+        return self._make_request(endpoint, params=params)
+
+    def get_orderbook(self, market_ticker: str, use_auth: bool = False, depth: int = 0) -> Dict:
         """
         Get orderbook for a specific market.
 
         Args:
             market_ticker: Market ticker symbol
             use_auth: Whether to use authentication (some orderbooks may require it)
+            depth: Orderbook depth (0 or negative for all levels, 1-100 for specific depth)
 
         Returns:
             Orderbook data with 'yes' and 'no' bid arrays
             Each bid is [price_in_cents, quantity]
+            Note: Returns empty lists for yes/no when orderbook is null (no active orders)
         """
         endpoint = f"/markets/{market_ticker}/orderbook"
-        return self._make_request(endpoint, use_auth=use_auth)
+        params = {}
+        if depth != 0:
+            params["depth"] = depth
+
+        response = self._make_request(endpoint, params=params if params else None, use_auth=use_auth)
+
+        # Handle the nested orderbook structure and null values
+        orderbook = response.get("orderbook", {})
+        if orderbook:
+            # Convert null values to empty lists for easier handling
+            if orderbook.get("yes") is None:
+                orderbook["yes"] = []
+            if orderbook.get("no") is None:
+                orderbook["no"] = []
+
+        return response
 
     def get_market(self, market_ticker: str) -> Dict:
         """
