@@ -1,22 +1,29 @@
-# Kalshi Market Analysis System
+# Kalshi Trading Bot
 
-A modular Python system for monitoring Kalshi prediction markets and identifying trading opportunities. The system analyzes market data to detect arbitrage, mispricings, wide spreads, and other inefficiencies - **without executing any trades**.
+A complete Python trading system for Kalshi prediction markets. Identifies trading opportunities using 13+ analyzers, manages positions with a sophisticated trade manager, and includes a full simulation environment for strategy testing.
 
 ## Features
 
-- **Six Analysis Modules**: Spread, Mispricing, Arbitrage, Momentum Fade, Correlation, and Imbalance analyzers
+- **13+ Analysis Modules**: Spread, mispricing, arbitrage, RSI, MACD, Bollinger Bands, momentum fade, theta decay, psychological levels, and more
+- **Trade Manager**: Position management, P&L tracking, stop losses, take profits, and risk management
+- **Live Simulator**: Backtest strategies with real Kalshi data using fake money
 - **Multiple Notification Channels**: Console, file, email, and Slack
-- **Configurable**: YAML-based configuration for all analyzers and notifiers
-- **Rate Limiting**: Built-in API rate limiting and caching
-- **Continuous Monitoring**: Run one-off analysis or continuous monitoring
-- **No Authentication Required**: Uses public Kalshi API endpoints
+- **Configurable**: YAML-based configuration for all components
+- **Kalshi API Client**: Full orderbook support, historical candlesticks, rate limiting, and caching
+- **Authentication Support**: Public endpoints (no auth) and private endpoints (with RSA-PSS auth)
+
+## Documentation
+
+📚 **[API Guide](docs/API_GUIDE.md)** - Kalshi API setup, orderbook, authentication, endpoints, and troubleshooting
+
+📊 **[Strategy Guide](docs/STRATEGY_GUIDE.md)** - Trading strategies, analyzers, trade manager, simulation, and risk management
 
 ## Installation
 
 ### Requirements
 
 - Python 3.10+
-- pip
+- uv (recommended) or pip
 
 ### Setup
 
@@ -24,159 +31,95 @@ A modular Python system for monitoring Kalshi prediction markets and identifying
 
 2. Install dependencies:
 ```bash
+# Using uv (recommended)
+uv sync
+
+# Or using pip
 pip install -r requirements.txt
 ```
 
-3. Copy the example configuration:
+3. **(Optional)** Set up authentication for private endpoints:
 ```bash
-cp config.example.yaml config.yaml
+export KALSHI_API_KEY_ID="your-key-id"
+export KALSHI_PRIV_KEY="base64-encoded-private-key"
 ```
 
-4. Edit `config.yaml` to customize analyzers and notifiers
+See [API Guide](docs/API_GUIDE.md) for authentication details.
 
 ## Quick Start
 
-### Run a single analysis cycle:
+### Run Strategy Simulation
+
+Test trading strategies with fake money:
+
 ```bash
+# Quick test (3 cycles)
+python3 run_simulation.py --mode test --cycles 3
+
+# Conservative strategy for 30 minutes
+python3 run_simulation.py --mode conservative --minutes 30
+
+# Aggressive strategy
+python3 run_simulation.py --mode aggressive --minutes 60
+
+# Technical analysis (RSI, MACD, Bollinger Bands)
+python3 run_simulation.py --mode technical --minutes 45
+```
+
+See [Strategy Guide](docs/STRATEGY_GUIDE.md) for detailed simulation options.
+
+### Run Market Analysis
+
+Analyze markets without trading:
+
+```bash
+# Single analysis cycle
 python main.py --once
-```
 
-### Run continuous monitoring (default 60-second interval):
-```bash
+# Continuous monitoring (60-second interval)
 python main.py
-```
 
-### Run with custom interval (e.g., every 2 minutes):
-```bash
+# Custom interval (e.g., every 2 minutes)
 python main.py --interval 120
-```
 
-### Test a specific analyzer:
-```bash
+# Test specific analyzer
 python main.py --analyzer spread --once
-```
 
-### List available analyzers:
-```bash
+# List available analyzers
 python main.py --list-analyzers
 ```
 
-## Analyzers
+## Available Analyzers
 
-### 1. Spread Analyzer
+The system includes 13+ specialized analyzers grouped into categories:
 
-Identifies markets with wide bid-ask spreads that may present market-making opportunities.
+### Core Market Analyzers
+- **Spread**: Wide bid-ask spreads (market-making opportunities)
+- **Mispricing**: Extreme prices and behavioral biases
+- **Arbitrage**: Risk-free cross-market opportunities
+- **Imbalance**: Orderbook depth imbalances
 
-**What it detects:**
-- Markets where `100¢ - (yes_bid + no_bid)` is large
-- Potential for providing liquidity
+### Technical Indicators
+- **RSI**: Overbought/oversold signals (requires historical data)
+- **MACD**: Trend signals
+- **Bollinger Bands**: Volatility breakouts
+- **MA Crossover**: Moving average crossovers
 
-**Example configuration:**
-```yaml
-spread:
-  enabled: true
-  config:
-    min_spread_cents: 10
-    wide_spread_cents: 20
-    very_wide_spread_cents: 30
-```
+### Behavioral/Advanced
+- **Momentum Fade**: Fade strong momentum moves
+- **Theta Decay**: Time decay near expiration
+- **Correlation**: Logical consistency across markets
+- **Volume Trend**: Volume-based signals
+- **Price Extreme Reversion**: Contrarian bets on extreme prices
+- **Orderbook Depth**: Order flow imbalance signals
 
-### 2. Mispricing Analyzer
+### Novice Exploitation (Advanced)
+- **Event Volatility**: Fade FOMO spikes after news
+- **Recency Bias**: Bet against short-term extrapolation
+- **Psychological Levels**: Exploit biases at round numbers
+- **Liquidity Trap**: Exploit thin orderbooks
 
-Detects potential mispricings based on extreme probabilities and round number bias.
-
-**What it detects:**
-- Markets at very low prices (e.g., <5¢) or very high prices (e.g., >95¢)
-- Prices clustering at round numbers (25¢, 50¢, 75¢) with low volume
-- Potential behavioral biases
-
-**Example configuration:**
-```yaml
-mispricing:
-  enabled: true
-  config:
-    extreme_low_threshold: 5
-    extreme_high_threshold: 95
-    round_numbers: [25, 50, 75]
-```
-
-### 3. Arbitrage Analyzer
-
-Finds risk-free arbitrage opportunities across markets.
-
-**What it detects:**
-- Simple arbitrage: When yes_bid + no_bid > 100¢ in a single market
-- Cross-market arbitrage: When related markets have inconsistent pricing
-- Opportunities to lock in guaranteed profits
-
-**Example configuration:**
-```yaml
-arbitrage:
-  enabled: true
-  config:
-    min_arb_cents: 2
-    transaction_cost_cents: 1
-```
-
-### 4. Momentum Fade Analyzer
-
-Tracks price changes over time and identifies sudden moves that may indicate overreaction.
-
-**What it detects:**
-- Rapid price movements
-- Potential mean reversion opportunities
-- Markets where recent momentum may fade
-
-**Note:** Requires state tracking, best used in continuous mode.
-
-**Example configuration:**
-```yaml
-momentum_fade:
-  enabled: true
-  config:
-    min_price_change_cents: 10
-    large_price_change_cents: 20
-    lookback_periods: 3
-```
-
-### 5. Correlation Analyzer
-
-Checks for logical consistency across related markets.
-
-**What it detects:**
-- Subset events priced higher than superset events
-  - Example: "Team wins by 10+" priced higher than "Team wins"
-- Correlation breaks in same event/series
-- Logically inconsistent probabilities
-
-**Example configuration:**
-```yaml
-correlation:
-  enabled: true
-  config:
-    min_inconsistency_cents: 5
-    check_same_event: true
-    check_same_series: true
-```
-
-### 6. Imbalance Analyzer
-
-Detects orderbook depth imbalances.
-
-**What it detects:**
-- One-sided liquidity (e.g., 5:1 ratio of yes:no depth)
-- Very thin liquidity on one side
-- Potential informed flow or mispricing signals
-
-**Example configuration:**
-```yaml
-imbalance:
-  enabled: true
-  config:
-    min_imbalance_ratio: 3.0
-    strong_imbalance_ratio: 5.0
-    min_total_liquidity: 100
-```
+See [Strategy Guide](docs/STRATEGY_GUIDE.md) for detailed analyzer descriptions, configurations, and usage examples.
 
 ## Notification Channels
 
@@ -278,78 +221,30 @@ Reasoning: Simple arbitrage: YES bid (52¢) + NO bid (51¢) = 103¢ > 100¢. Net
 ## Project Structure
 
 ```
-kalshi-bot-claude/
-├── analyzers/              # Analysis modules
-│   ├── __init__.py
+trading-bot/
+├── docs/                    # Documentation
+│   ├── API_GUIDE.md        # Kalshi API guide
+│   └── STRATEGY_GUIDE.md   # Trading strategies guide
+├── analyzers/              # 13+ analyzer modules
 │   ├── base.py            # Base analyzer interface
 │   ├── spread_analyzer.py
-│   ├── mispricing_analyzer.py
-│   ├── arbitrage_analyzer.py
-│   ├── momentum_fade_analyzer.py
-│   ├── correlation_analyzer.py
-│   └── imbalance_analyzer.py
-├── tests/                 # Unit tests
-│   ├── __init__.py
-│   └── test_analyzers.py
-├── kalshi_client.py       # Kalshi API client
-├── notifier.py           # Notification system
-├── main.py               # Main orchestrator
-├── config.example.yaml   # Example configuration
-├── requirements.txt      # Python dependencies
-└── README.md            # This file
-```
-
-## Adding Custom Analyzers
-
-To add a new analyzer:
-
-1. Create a new file in `analyzers/` (e.g., `my_analyzer.py`)
-
-2. Inherit from `BaseAnalyzer`:
-
-```python
-from analyzers.base import BaseAnalyzer, Opportunity, OpportunityType, ConfidenceLevel
-
-class MyAnalyzer(BaseAnalyzer):
-    def get_name(self) -> str:
-        return "My Custom Analyzer"
-
-    def get_description(self) -> str:
-        return "Describes what this analyzer does"
-
-    def analyze(self, markets: List[Dict]) -> List[Opportunity]:
-        opportunities = []
-
-        for market in markets:
-            # Your analysis logic here
-            if some_condition:
-                opp = Opportunity(
-                    opportunity_type=OpportunityType.MISPRICING,
-                    confidence=ConfidenceLevel.MEDIUM,
-                    # ... other fields
-                )
-                opportunities.append(opp)
-
-        return opportunities
-```
-
-3. Register your analyzer in `main.py`:
-
-```python
-ANALYZER_REGISTRY = {
-    "my_analyzer": MyAnalyzer,
-    # ... other analyzers
-}
-```
-
-4. Add configuration to `config.yaml`:
-
-```yaml
-analyzers:
-  my_analyzer:
-    enabled: true
-    config:
-      custom_param: value
+│   ├── rsi_analyzer.py
+│   ├── orderbook_depth_analyzer.py
+│   └── ... (10+ more)
+├── tests/                  # Test suite
+│   ├── test_analyzers.py
+│   ├── test_orderbook.py
+│   └── test_examples.py
+├── kalshi_client.py        # Kalshi API client
+├── trade_manager.py        # Position & risk management
+├── simulator.py            # Strategy backtesting
+├── run_simulation.py       # Simulation runner
+├── main.py                 # Market analysis orchestrator
+├── notifier.py            # Notification system
+├── market_maker_bot.py    # Market making bot
+├── config_novice_exploit.yaml  # Example config
+├── pyproject.toml         # Dependencies
+└── README.md              # This file
 ```
 
 ## Running Tests
@@ -358,83 +253,72 @@ analyzers:
 # Run all tests
 pytest tests/
 
-# Run with verbose output
-pytest tests/ -v
-
-# Run specific test file
+# Run specific test
+pytest tests/test_orderbook.py -v
 pytest tests/test_analyzers.py -v
+
+# Run orderbook examples
+python tests/test_examples.py
 ```
 
 ## Important Notes
 
-### Rate Limiting
+### Trading vs Analysis
 
-The system includes built-in rate limiting to avoid overwhelming the Kalshi API:
-- Default: 0.1 second delay between requests
-- Configurable via `rate_limit_delay` in config
-- Caching enabled (default 30 second TTL)
+- **Simulator mode** (`run_simulation.py`): Uses fake money for strategy testing
+- **Analysis mode** (`main.py`): Identifies opportunities without trading
+- **Live trading**: Available via trade manager and market maker bot (use at your own risk)
 
-### API Limits
+### Rate Limiting & API
 
-The example configuration limits analysis to 100 markets to prevent excessive API calls. Adjust `max_markets_to_analyze` based on your needs and API rate limits.
-
-### No Trading
-
-This system is for **analysis and notification only**. It does not execute trades. All identified opportunities should be manually reviewed before acting on them.
+- Built-in rate limiting (20 req/sec default)
+- Token bucket algorithm with configurable limits
+- Caching enabled (30 second TTL default)
+- See [API Guide](docs/API_GUIDE.md) for details
 
 ### Disclaimer
 
-This software is for educational and research purposes only. Trading prediction markets involves risk. Past performance and identified patterns do not guarantee future results. Always do your own research and risk assessment.
+**For educational and research purposes only.** Trading involves risk. Past performance does not guarantee future results. Start with paper trading, use small position sizes, and never risk more than you can afford to lose.
 
 ## Troubleshooting
 
-### "No module named 'yaml'"
-
-Install PyYAML:
+### Missing Dependencies
 ```bash
-pip install pyyaml
+# Install all dependencies
+uv sync
+# Or
+pip install -r requirements.txt
 ```
 
-### "Connection refused" errors
+### Orderbook Issues
+See [API Guide - Troubleshooting](docs/API_GUIDE.md#troubleshooting) for:
+- Null orderbook handling
+- Authentication errors
+- Candlestick price extraction
+- Finding long-lived markets
 
-Check your internet connection and verify the Kalshi API is accessible:
-```bash
-curl https://api.elections.kalshi.com/trade-api/v2/markets?limit=1
-```
-
-### No opportunities found
-
-This is normal! The analyzers use conservative thresholds. Try:
-- Adjusting analyzer config parameters (lower thresholds)
+### No Opportunities Found
+This is normal! Try:
+- Adjusting analyzer thresholds (see [Strategy Guide](docs/STRATEGY_GUIDE.md))
 - Running during high-volatility periods
-- Enabling more analyzers
+- Using simulator to test different configurations
 
-### High API usage
-
-If you're hitting rate limits:
+### Rate Limiting
+If hitting rate limits:
 - Increase `rate_limit_delay` in config
 - Decrease `max_markets_to_analyze`
-- Increase polling `interval` for continuous mode
-
-## License
-
-MIT License - See LICENSE file for details
-
-## Contributing
-
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Submit a pull request
+- See [API Guide](docs/API_GUIDE.md) for rate limit details
 
 ## Support
 
-For questions or issues:
-- Open an issue on GitHub
-- Check the Kalshi API documentation: https://docs.kalshi.com/
+- **Documentation**: [API Guide](docs/API_GUIDE.md) | [Strategy Guide](docs/STRATEGY_GUIDE.md)
+- **Kalshi API**: https://docs.kalshi.com/
+- **Issues**: Open an issue on GitHub
 
-## Acknowledgments
+## License
 
-- Built for the Kalshi prediction market platform
-- Uses the public Kalshi API (no authentication required for market data)
+MIT License
+
+---
+
+Built for the Kalshi prediction market platform. Uses the Kalshi API (public endpoints require no authentication).
