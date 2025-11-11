@@ -145,11 +145,11 @@ def run_novice_exploit_simulation(duration_minutes: float = 30):
     """
     Run simulation using the novice exploitation analyzers.
 
-    Includes: psychological_levels, recency_bias, theta_decay, event_volatility
+    Includes: psychological_levels, recency_bias, theta_decay, event_volatility, hype_fomo
     """
     print("\n" + "=" * 80)
     print("NOVICE EXPLOITATION SIMULATION")
-    print("Psychological levels, recency bias, theta decay, event volatility")
+    print("Psychological levels, recency bias, theta decay, event volatility, hype/FOMO")
     print("=" * 80 + "\n")
 
     trade_config = TradeManagerConfig(
@@ -168,6 +168,7 @@ def run_novice_exploit_simulation(duration_minutes: float = 30):
             "recency_bias",
             "theta_decay",
             "event_volatility",
+            "hype_fomo",
         ],
         max_markets=100,
         update_interval_seconds=90,
