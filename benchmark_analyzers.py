@@ -6,14 +6,23 @@ Tests all analyzers individually and in combinations to determine which
 strategies perform best. Runs simulations with real Kalshi data and fake money.
 
 Usage:
-    # Run all tests (default 2 hours total)
+    # Run all tests SEQUENTIALLY (default, 2 hours total)
     python3 benchmark_analyzers.py
+    # Each test gets ~7 minutes (2 hours / 17 tests)
 
-    # Run for 4 hours total
+    # Run all tests IN PARALLEL (RECOMMENDED! 2 hours per test)
+    python3 benchmark_analyzers.py --parallel
+    # Each test gets FULL 2 hours, completes in ~2 hours wall-clock time
+    # 17x more data than sequential!
+
+    # Parallel with more workers (be careful of API rate limits)
+    python3 benchmark_analyzers.py --parallel --max-workers 8 --hours 4
+
+    # Run for 4 hours total (sequential)
     python3 benchmark_analyzers.py --hours 4
 
-    # Test specific analyzers only
-    python3 benchmark_analyzers.py --analyzers spread,rsi,llm_reasoning
+    # Test specific analyzers in parallel
+    python3 benchmark_analyzers.py --analyzers spread_only,llm_enhanced --parallel --hours 1
 
     # Resume from previous run
     python3 benchmark_analyzers.py --resume results/benchmark_results.json
@@ -23,6 +32,7 @@ import argparse
 import json
 import logging
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Any, Optional
@@ -335,6 +345,15 @@ def load_results(input_path: str) -> List[Dict[str, Any]]:
     return data.get("results", [])
 
 
+def run_test_wrapper(args_tuple):
+    """
+    Wrapper for run_test that unpacks arguments.
+    Needed for ProcessPoolExecutor compatibility.
+    """
+    test_id, test_config, duration_minutes = args_tuple
+    return run_test(test_id, test_config, duration_minutes)
+
+
 def main():
     """Main benchmark function."""
     parser = argparse.ArgumentParser(
@@ -345,7 +364,7 @@ def main():
         "--hours",
         type=float,
         default=2.0,
-        help="Total hours for all tests (default: 2)",
+        help="Total hours (per test if --parallel, total if sequential)",
     )
     parser.add_argument(
         "--analyzers",
@@ -362,6 +381,17 @@ def main():
         "--resume",
         type=str,
         help="Resume from previous results file",
+    )
+    parser.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Run all tests in parallel (each gets full duration)",
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=4,
+        help="Max parallel workers (default: 4, to avoid API rate limits)",
     )
     parser.add_argument(
         "--list",
@@ -407,14 +437,26 @@ def main():
     # Calculate time per test
     num_tests = len(tests_to_run)
     total_minutes = args.hours * 60
-    minutes_per_test = total_minutes / num_tests
+
+    if args.parallel:
+        minutes_per_test = total_minutes  # Each test gets full duration!
+        execution_mode = "PARALLEL"
+    else:
+        minutes_per_test = total_minutes / num_tests
+        execution_mode = "SEQUENTIAL"
 
     print("=" * 80)
-    print("ANALYZER BENCHMARK")
+    print(f"ANALYZER BENCHMARK - {execution_mode} MODE")
     print("=" * 80)
     print(f"Total duration: {args.hours:.1f} hours ({total_minutes:.0f} minutes)")
     print(f"Number of tests: {num_tests}")
-    print(f"Time per test: {minutes_per_test:.1f} minutes")
+    if args.parallel:
+        print(f"Time per test: {minutes_per_test:.1f} minutes (EACH TEST GETS FULL DURATION!)")
+        print(f"Max parallel workers: {args.max_workers}")
+        print(f"Wall-clock time: ~{minutes_per_test:.1f} minutes")
+    else:
+        print(f"Time per test: {minutes_per_test:.1f} minutes")
+        print(f"Wall-clock time: ~{total_minutes:.1f} minutes")
     print()
     print("Tests to run:")
     for test_id, config in tests_to_run.items():
@@ -425,21 +467,70 @@ def main():
     # Run tests
     start_time = datetime.now()
 
-    for i, (test_id, test_config) in enumerate(tests_to_run.items(), 1):
-        print(f"\n[{i}/{num_tests}] Running test: {test_id}")
+    if args.parallel:
+        # PARALLEL EXECUTION
+        print(f"🚀 Running {num_tests} tests in parallel with {args.max_workers} workers...")
+        print()
 
-        result = run_test(test_id, test_config, minutes_per_test)
-        all_results.append(result)
+        # Prepare arguments for all tests
+        test_args = [
+            (test_id, test_config, minutes_per_test)
+            for test_id, test_config in tests_to_run.items()
+        ]
 
-        # Save intermediate results
-        save_results(all_results, args.output)
+        # Run tests in parallel
+        completed_count = 0
+        with ProcessPoolExecutor(max_workers=args.max_workers) as executor:
+            # Submit all tests
+            future_to_test = {
+                executor.submit(run_test_wrapper, args): args[0]
+                for args in test_args
+            }
 
-        # Print quick summary
-        if result.get("status") == "completed":
-            print(f"\n✅ {test_config['name']}: {result['total_pnl_percent']:+.2f}% return")
-            print(f"   Trades: {result['total_trades']}, Win rate: {result.get('win_rate', 0):.1f}%")
-        else:
-            print(f"\n❌ {test_config['name']}: FAILED")
+            # Collect results as they complete
+            for future in as_completed(future_to_test):
+                test_id = future_to_test[future]
+                completed_count += 1
+
+                try:
+                    result = future.result()
+                    all_results.append(result)
+
+                    # Print progress
+                    if result.get("status") == "completed":
+                        print(f"✅ [{completed_count}/{num_tests}] {result['name']}: {result['total_pnl_percent']:+.2f}% return")
+                        print(f"   Trades: {result['total_trades']}, Win rate: {result.get('win_rate', 0):.1f}%")
+                    else:
+                        print(f"❌ [{completed_count}/{num_tests}] {result['name']}: FAILED")
+
+                    # Save intermediate results
+                    save_results(all_results, args.output)
+
+                except Exception as e:
+                    logger.error(f"Test {test_id} raised exception: {e}")
+                    all_results.append({
+                        "test_id": test_id,
+                        "status": "failed",
+                        "error": str(e)
+                    })
+
+    else:
+        # SEQUENTIAL EXECUTION (original logic)
+        for i, (test_id, test_config) in enumerate(tests_to_run.items(), 1):
+            print(f"\n[{i}/{num_tests}] Running test: {test_id}")
+
+            result = run_test(test_id, test_config, minutes_per_test)
+            all_results.append(result)
+
+            # Save intermediate results
+            save_results(all_results, args.output)
+
+            # Print quick summary
+            if result.get("status") == "completed":
+                print(f"\n✅ {test_config['name']}: {result['total_pnl_percent']:+.2f}% return")
+                print(f"   Trades: {result['total_trades']}, Win rate: {result.get('win_rate', 0):.1f}%")
+            else:
+                print(f"\n❌ {test_config['name']}: FAILED")
 
     # Print final comparison
     total_time = (datetime.now() - start_time).total_seconds() / 60
