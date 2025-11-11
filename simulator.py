@@ -31,6 +31,7 @@ from analyzers.event_volatility_analyzer import EventVolatilityCrushAnalyzer
 from analyzers.recency_bias_analyzer import RecencyBiasAnalyzer
 from analyzers.psychological_level_analyzer import PsychologicalLevelAnalyzer
 from analyzers.liquidity_trap_analyzer import LiquidityTrapAnalyzer
+from analyzers.hype_fomo_detector import HypeFomoDetector
 from analyzers.value_bet_analyzer import ValueBetAnalyzer
 from analyzers.trend_follower_analyzer import TrendFollowerAnalyzer
 from analyzers.mean_reversion_analyzer import MeanReversionAnalyzer
@@ -61,6 +62,7 @@ ANALYZER_REGISTRY = {
     "recency_bias": RecencyBiasAnalyzer,
     "psychological_levels": PsychologicalLevelAnalyzer,
     "liquidity_trap": LiquidityTrapAnalyzer,
+    "hype_fomo": HypeFomoDetector,
     "value_bet": ValueBetAnalyzer,
     "trend_follower": TrendFollowerAnalyzer,
     "mean_reversion": MeanReversionAnalyzer,
