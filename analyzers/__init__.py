@@ -13,6 +13,7 @@ from .rsi_analyzer import RSIAnalyzer
 from .bollinger_bands_analyzer import BollingerBandsAnalyzer
 from .macd_analyzer import MACDAnalyzer
 from .volume_trend_analyzer import VolumeTrendAnalyzer
+from .hype_fomo_detector import HypeFomoDetector
 
 __all__ = [
     "BaseAnalyzer",
@@ -31,4 +32,5 @@ __all__ = [
     "BollingerBandsAnalyzer",
     "MACDAnalyzer",
     "VolumeTrendAnalyzer",
+    "HypeFomoDetector",
 ]

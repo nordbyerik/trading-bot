@@ -34,6 +34,7 @@ from analyzers.event_volatility_analyzer import EventVolatilityCrushAnalyzer
 from analyzers.recency_bias_analyzer import RecencyBiasAnalyzer
 from analyzers.psychological_level_analyzer import PsychologicalLevelAnalyzer
 from analyzers.liquidity_trap_analyzer import LiquidityTrapAnalyzer
+from analyzers.hype_fomo_detector import HypeFomoDetector
 
 
 # Configure logging
@@ -62,6 +63,7 @@ ANALYZER_REGISTRY = {
     "recency_bias": RecencyBiasAnalyzer,
     "psychological_levels": PsychologicalLevelAnalyzer,
     "liquidity_trap": LiquidityTrapAnalyzer,
+    "hype_fomo": HypeFomoDetector,
 }
 
 
