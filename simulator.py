@@ -37,6 +37,7 @@ from analyzers.mean_reversion_analyzer import MeanReversionAnalyzer
 from analyzers.volume_surge_analyzer import VolumeSurgeAnalyzer
 from analyzers.orderbook_depth_analyzer import OrderbookDepthAnalyzer
 from analyzers.price_extreme_reversion_analyzer import PriceExtremeReversionAnalyzer
+from analyzers.llm_reasoning_analyzer import LLMReasoningAnalyzer
 
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,8 @@ ANALYZER_REGISTRY = {
     "orderbook_depth": OrderbookDepthAnalyzer,
     # Price-based analyzers
     "price_extreme_reversion": PriceExtremeReversionAnalyzer,
+    # LLM-powered analyzers
+    "llm_reasoning": LLMReasoningAnalyzer,
 }
 
 
@@ -99,6 +102,8 @@ class SimulatorConfig:
     # Data fetching
     max_markets: int = 100  # Max markets to analyze per cycle
     market_status: str = "open"  # Market status filter
+    min_volume: Optional[int] = 10  # Minimum volume filter (None = no filter)
+    max_volume: Optional[int] = None  # Maximum volume filter (None = no filter)
 
     # Simulation timing
     update_interval_seconds: int = 60  # Time between cycles
@@ -250,13 +255,18 @@ class TradingSimulator:
         """
         logger.info("Fetching market data...")
 
-        # Fetch markets with minimum volume to ensure liquid markets
+        # Fetch markets with volume filters
         markets = self.client.get_all_open_markets(
             max_markets=self.config.max_markets,
             status=self.config.market_status,
-            min_volume=10  # Filter for markets with at least some volume
+            min_volume=self.config.min_volume if self.config.min_volume else 0
         )
         logger.info(f"Fetched {len(markets)} markets")
+
+        # Apply max_volume filter if specified
+        if self.config.max_volume is not None:
+            markets = [m for m in markets if m.get("volume", 0) <= self.config.max_volume]
+            logger.info(f"Filtered to {len(markets)} markets with volume <= {self.config.max_volume}")
 
         # Filter out markets with no last_price (untradable)
         markets_with_price = [m for m in markets if m.get("last_price") is not None and m.get("last_price") > 0]

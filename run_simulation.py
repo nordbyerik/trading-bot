@@ -141,7 +141,7 @@ def run_from_config_file(config_path: str, duration_minutes: float = 30):
     return simulator, report
 
 
-def run_novice_exploit_simulation(duration_minutes: float = 30):
+def run_novice_exploit_simulation(duration_minutes: float = 30, min_volume: Optional[int] = None, max_volume: Optional[int] = None):
     """
     Run simulation using the novice exploitation analyzers.
 
@@ -170,6 +170,8 @@ def run_novice_exploit_simulation(duration_minutes: float = 30):
             "event_volatility",
         ],
         max_markets=100,
+        min_volume=min_volume,
+        max_volume=max_volume,
         update_interval_seconds=90,
         snapshot_interval_seconds=300,
     )
@@ -181,7 +183,7 @@ def run_novice_exploit_simulation(duration_minutes: float = 30):
     return simulator, report
 
 
-def run_conservative_simulation(duration_minutes: float = 30):
+def run_conservative_simulation(duration_minutes: float = 30, min_volume: Optional[int] = None, max_volume: Optional[int] = None):
     """Run conservative simulation (high confidence, hard opportunities only)."""
     print("\n" + "=" * 80)
     print("CONSERVATIVE SIMULATION")
@@ -205,6 +207,8 @@ def run_conservative_simulation(duration_minutes: float = 30):
         trade_manager_config=trade_config,
         analyzer_names=["spread", "mispricing", "arbitrage"],
         max_markets=50,
+        min_volume=min_volume,
+        max_volume=max_volume,
         update_interval_seconds=120,  # 2 minutes between cycles
         snapshot_interval_seconds=300,  # 5 minute snapshots
     )
@@ -216,7 +220,7 @@ def run_conservative_simulation(duration_minutes: float = 30):
     return simulator, report
 
 
-def run_aggressive_simulation(duration_minutes: float = 30):
+def run_aggressive_simulation(duration_minutes: float = 30, min_volume: Optional[int] = None, max_volume: Optional[int] = None):
     """Run aggressive simulation (lower thresholds, more trades)."""
     print("\n" + "=" * 80)
     print("AGGRESSIVE SIMULATION")
@@ -240,6 +244,8 @@ def run_aggressive_simulation(duration_minutes: float = 30):
         trade_manager_config=trade_config,
         analyzer_names=["spread", "mispricing", "rsi", "imbalance", "momentum_fade"],
         max_markets=100,
+        min_volume=min_volume,
+        max_volume=max_volume,
         update_interval_seconds=60,  # 1 minute between cycles
         snapshot_interval_seconds=180,  # 3 minute snapshots
     )
@@ -251,7 +257,7 @@ def run_aggressive_simulation(duration_minutes: float = 30):
     return simulator, report
 
 
-def run_technical_simulation(duration_minutes: float = 30):
+def run_technical_simulation(duration_minutes: float = 30, min_volume: Optional[int] = None, max_volume: Optional[int] = None):
     """Run simulation using only technical analyzers."""
     print("\n" + "=" * 80)
     print("TECHNICAL ANALYSIS SIMULATION")
@@ -271,6 +277,8 @@ def run_technical_simulation(duration_minutes: float = 30):
         trade_manager_config=trade_config,
         analyzer_names=["rsi", "macd", "bollinger_bands", "ma_crossover"],
         max_markets=75,
+        min_volume=min_volume,
+        max_volume=max_volume,
         update_interval_seconds=90,
         snapshot_interval_seconds=300,
     )
@@ -282,7 +290,7 @@ def run_technical_simulation(duration_minutes: float = 30):
     return simulator, report
 
 
-def run_quick_test(cycles: int = 3):
+def run_quick_test(cycles: int = 3, min_volume: Optional[int] = None, max_volume: Optional[int] = None):
     """Run quick test simulation."""
     print("\n" + "=" * 80)
     print("QUICK TEST SIMULATION")
@@ -307,6 +315,8 @@ def run_quick_test(cycles: int = 3):
             "ma_crossover",
         ],
         max_markets=50,
+        min_volume=min_volume,
+        max_volume=max_volume,
         update_interval_seconds=30,
     )
 
@@ -360,6 +370,16 @@ Examples:
         action="store_true",
         help="Plot equity curve at end (requires matplotlib)",
     )
+    parser.add_argument(
+        "--min-volume",
+        type=int,
+        help="Minimum market volume filter (default: 10)",
+    )
+    parser.add_argument(
+        "--max-volume",
+        type=int,
+        help="Maximum market volume filter (default: None). Use for small market specialist mode.",
+    )
 
     args = parser.parse_args()
 
@@ -370,18 +390,18 @@ Examples:
     # Otherwise run selected mode
     elif args.mode == "conservative":
         duration = args.minutes or 30
-        simulator, report = run_conservative_simulation(duration)
+        simulator, report = run_conservative_simulation(duration, args.min_volume, args.max_volume)
     elif args.mode == "aggressive":
         duration = args.minutes or 30
-        simulator, report = run_aggressive_simulation(duration)
+        simulator, report = run_aggressive_simulation(duration, args.min_volume, args.max_volume)
     elif args.mode == "technical":
         duration = args.minutes or 30
-        simulator, report = run_technical_simulation(duration)
+        simulator, report = run_technical_simulation(duration, args.min_volume, args.max_volume)
     elif args.mode == "novice_exploit":
         duration = args.minutes or 30
-        simulator, report = run_novice_exploit_simulation(duration)
+        simulator, report = run_novice_exploit_simulation(duration, args.min_volume, args.max_volume)
     else:  # test
-        simulator, report = run_quick_test(args.cycles)
+        simulator, report = run_quick_test(args.cycles, args.min_volume, args.max_volume)
 
     # Plot if requested
     if args.plot and simulator:
