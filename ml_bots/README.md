@@ -1,90 +1,142 @@
-# ML Bots - Machine Learning Trading System
+# ML Bots - Machine Learning Data Pipeline & Analyzer
 
-Machine learning based trading bots for Kalshi prediction markets. This system provides a complete pipeline for fetching historical data, training ML models, and generating trading signals.
+Machine learning infrastructure for Kalshi prediction markets, fully integrated with the existing trading bot system.
 
-## Features
+## Overview
 
-- **Data Pipeline**: Fetch and transform historical market data into ML-ready formats
-- **Multiple ML Models**: Logistic Regression, Random Forest, Neural Networks
-- **Technical Features**: RSI, MACD, moving averages, volatility, and more
-- **Trading Signals**: Confidence-based trading recommendations
-- **Flexible Architecture**: Easy to extend with custom models and features
+This package provides:
+- **Data Pipeline**: Fetch and transform historical market data
+- **ML Models**: Train prediction models (Logistic, Random Forest, Neural Networks)
+- **ML Analyzer**: Integrated analyzer for the simulator
+
+The ML predictor works as a standard analyzer in the existing infrastructure, compatible with the simulator, trade manager, and all other analyzers.
 
 ## Quick Start
 
-### 1. Install Dependencies
+### Run ML Analyzer with Simulator
 
 ```bash
-# Install ML dependencies
-pip install pandas numpy scikit-learn torch matplotlib seaborn
+# Quick test (3 cycles)
+python demo_ml_analyzer.py --mode test
 
-# Or use requirements.txt
-pip install -r requirements.txt
+# 30-minute simulation
+python demo_ml_analyzer.py --minutes 30
+
+# Custom model and confidence
+python demo_ml_analyzer.py --minutes 30 --model neural_network --confidence 0.75
 ```
 
-### 2. Run the Demo
+### Use in Simulation Scripts
 
 ```bash
-# Basic demo (15 markets, 7 days, random forest)
-python demo_ml_bot.py
-
-# Custom configuration
-python demo_ml_bot.py --model random_forest --markets 20 --days 10 --confidence 0.7
-
-# Use neural network
-python demo_ml_bot.py --model neural_network --markets 25 --days 14
+# Use ML analyzer with existing run_simulation.py
+python run_simulation.py --mode ml --minutes 30
 ```
 
-### 3. Use in Your Code
+### Combine with Other Analyzers
 
 ```python
-from ml_bots.bots.ml_trading_bot import MLTradingBot
+from run_simulation import setup_simulation, run_cycles
 
-# Initialize bot
-bot = MLTradingBot(model_type='random_forest', min_confidence=0.65)
-
-# Train model
-result = bot.train_model(
-    min_volume=100,
-    max_markets=20,
-    days_back=7,
-    period_interval=60  # 1-hour candles
+# Combine ML with traditional analyzers
+simulator = setup_simulation(
+    analyzer_names=['ml_predictor', 'rsi', 'spread'],
+    analyzer_configs={
+        'ml_predictor': {
+            'model_type': 'random_forest',
+            'hard_min_confidence': 0.70,
+            'training_markets': 20
+        }
+    }
 )
 
-# Generate trading signals
-signals = bot.generate_trading_signals(max_markets=10)
-
-# Process signals
-for signal in signals:
-    print(f"{signal['action']} {signal['side']} on {signal['market']['ticker']}")
-    print(f"Confidence: {signal['confidence']:.1%}")
+run_cycles(simulator, duration_minutes=60)
 ```
 
 ## Architecture
 
 ```
 ml_bots/
-├── data_pipeline/           # Data fetching and transformation
+├── data_pipeline/           # Data utilities
 │   ├── data_fetcher.py     # Fetch historical data from Kalshi
-│   └── data_transformer.py # Transform to DataFrames/tensors
-├── models/                  # ML model implementations
-│   └── price_predictor.py  # Price prediction models
-└── bots/                    # Trading bot implementations
-    └── ml_trading_bot.py   # Main ML trading bot
+│   └── data_transformer.py # Transform to DataFrames/tensors + features
+└── models/                  # ML models
+    └── price_predictor.py  # Price prediction models
+
+analyzers/
+└── ml_predictor_analyzer.py # ML Analyzer (integrated with system)
 ```
 
-## Data Pipeline
+## ML Analyzer Configuration
 
-### HistoricalDataFetcher
+The ML analyzer follows the same configuration pattern as other analyzers:
 
-Fetches historical market data from Kalshi API.
+```python
+ml_config = {
+    # Model configuration
+    'model_type': 'random_forest',  # logistic, random_forest, neural_network
+
+    # Training parameters
+    'train_on_first_run': True,     # Auto-train on first analyze() call
+    'training_markets': 15,          # Markets to train on
+    'training_days': 7,              # Days of historical data
+    'training_interval': 60,         # Candlestick interval (minutes)
+    'prediction_horizon': 1,         # Periods ahead to predict
+
+    # Hard thresholds (strict requirements)
+    'hard_min_confidence': 0.70,     # Minimum confidence
+    'hard_high_confidence': 0.80,    # High confidence threshold
+
+    # Soft thresholds (relaxed requirements)
+    'soft_min_confidence': 0.60,     # Minimum confidence
+    'soft_high_confidence': 0.70,    # High confidence threshold
+
+    # Edge estimation
+    'edge_multiplier': 10,           # Confidence to edge conversion
+}
+```
+
+## How It Works
+
+### 1. Automatic Training
+
+On first run, the analyzer:
+1. Discovers active markets with sufficient volume
+2. Fetches historical candlestick data (7 days by default)
+3. Extracts technical features (RSI, MA, volatility, etc.)
+4. Trains the selected ML model
+5. Evaluates performance on validation set
+
+### 2. Signal Generation
+
+For each market analyzed:
+1. Fetches recent historical data
+2. Computes technical features
+3. Makes prediction using trained model
+4. Returns `Opportunity` if confidence meets threshold
+
+### 3. Integration
+
+The ML analyzer returns standard `Opportunity` objects, so:
+- Trades are executed by `TradeManager`
+- Performance tracked by `Simulator`
+- Works alongside other analyzers
+- Uses existing notification system
+
+## Data Pipeline Usage
+
+The data pipeline modules can be used independently:
+
+### Fetch Historical Data
 
 ```python
 from ml_bots.data_pipeline import HistoricalDataFetcher
+from kalshi_client import KalshiDataClient
 
-fetcher = HistoricalDataFetcher()
+client = KalshiDataClient()
+fetcher = HistoricalDataFetcher(client)
 
-# Fetch data for ML training
+# Fetch dataset for ML training
 dataset = fetcher.fetch_dataset_for_ml(
     min_volume=100,
     max_markets=20,
@@ -101,65 +153,49 @@ candlesticks = fetcher.fetch_market_candlesticks(
 )
 ```
 
-### DataTransformer
-
-Transforms raw data into ML-ready formats.
+### Transform Data
 
 ```python
 from ml_bots.data_pipeline import DataTransformer
 
 transformer = DataTransformer()
 
-# Convert candlesticks to DataFrame
+# Convert to DataFrame
 df = transformer.candlesticks_to_dataframe(candlesticks)
 
 # Add technical features
 df = transformer.add_technical_features(df)
 
-# Create labels for supervised learning
+# Create labels
 df = transformer.create_labels(df, prediction_horizon=1)
 
-# Prepare features and labels
+# Prepare for ML
 X, y = transformer.prepare_features_and_labels(df)
 
-# Convert to tensors
+# Convert to tensors (optional)
 X_tensor, y_tensor = transformer.to_torch_tensors(X, y)
 ```
 
-## ML Models
-
-### Supported Models
-
-1. **Logistic Regression**: Fast, interpretable baseline
-2. **Random Forest**: Best general-purpose model, provides feature importance
-3. **Neural Network**: Deep learning with PyTorch (3-layer MLP)
-
-### PricePredictor
+### Train Custom Model
 
 ```python
 from ml_bots.models.price_predictor import PricePredictor
 
-# Create model
+# Create and train model
 predictor = PricePredictor(model_type='random_forest')
-
-# Train
 metrics = predictor.train(X_train, y_train, X_val, y_val)
 
-# Predict
+# Make predictions
 predictions = predictor.predict(X_test)
 probabilities = predictor.predict_proba(X_test)
 
-# Get feature importance (random forest only)
+# Get feature importance
 importance = predictor.get_feature_importance()
-
-# Save/load model
-predictor.save_model('model.pkl')
-predictor.load_model('model.pkl')
 ```
 
 ## Technical Features
 
-The data transformer automatically generates these features:
+Automatically generated features include:
 
 ### Price Features
 - `price_change`: Absolute price change
@@ -167,7 +203,7 @@ The data transformer automatically generates these features:
 - `ma_5`, `ma_10`, `ma_20`: Moving averages
 
 ### Technical Indicators
-- `rsi_14`: Relative Strength Index (14 periods)
+- `rsi_14`: Relative Strength Index
 - `volatility_10`: Rolling standard deviation
 
 ### Volume Features
@@ -177,166 +213,110 @@ The data transformer automatically generates these features:
 ### Orderbook Features
 - `spread`: Bid-ask spread
 
-## Trading Signals
+## ML Models
 
-The bot generates trading signals with:
+### Logistic Regression
+- Fast, interpretable baseline
+- Good for linear relationships
+- Low computational cost
 
-- **Market**: Market ticker and details
-- **Action**: BUY or SELL
-- **Side**: yes or no
-- **Direction**: UP or DOWN (predicted price movement)
-- **Confidence**: Prediction probability (0.0-1.0)
-- **Latest Price**: Current market price
+### Random Forest (Recommended)
+- Best general-purpose model
+- Handles non-linear patterns
+- Provides feature importance
+- Robust to overfitting
 
-Example signal:
-
-```python
-{
-    'market': {
-        'ticker': 'INXD-25JAN10-T5000.00',
-        'title': 'Will the S&P 500 close above 5000.00 on Jan 10?',
-        'volume': 15234
-    },
-    'prediction': {
-        'direction': 'UP',
-        'confidence': 0.73,
-        'latest_price': 48.5
-    },
-    'action': 'BUY',
-    'side': 'yes'
-}
-```
-
-## Demo Script Options
-
-```bash
-python demo_ml_bot.py [OPTIONS]
-
-Options:
-  --model TYPE           Model type: logistic, random_forest, neural_network
-                         (default: random_forest)
-
-  --markets N            Number of markets for training
-                         (default: 15)
-
-  --days N               Days of historical data
-                         (default: 7)
-
-  --confidence FLOAT     Minimum confidence threshold (0.0-1.0)
-                         (default: 0.65)
-
-  --signal-markets N     Number of markets to analyze for signals
-                         (default: 10)
-
-  --save-model PATH      Save trained model to file
-                         (optional)
-```
+### Neural Network
+- 3-layer MLP with dropout
+- Can capture complex patterns
+- Requires more training data
+- Longer training time
 
 ## Examples
 
-### Example 1: Basic Usage
+### Example 1: Basic ML Simulation
 
 ```bash
-python demo_ml_bot.py
-```
-
-Output:
-```
-================================================================================
- ML Trading Bot Demo
-================================================================================
-
-Configuration:
-  Model type: random_forest
-  Training markets: 15
-  Historical days: 7
-  ...
-
-✅ Training successful!
-Training Statistics:
-  Markets used: 15
-  Total samples: 1247
-  Features: 14
-
-Model Performance:
-  train_accuracy: 0.6234
-  val_accuracy: 0.6012
-
-✅ Generated 5 trading signals
+python demo_ml_analyzer.py --mode test
 ```
 
 ### Example 2: Neural Network
 
 ```bash
-python demo_ml_bot.py --model neural_network --days 14 --markets 25
+python demo_ml_analyzer.py --minutes 30 --model neural_network
 ```
 
 ### Example 3: High Confidence
 
 ```bash
-python demo_ml_bot.py --confidence 0.80 --markets 30
+python demo_ml_analyzer.py --minutes 60 --confidence 0.80
 ```
 
-### Example 4: Save Model
-
-```bash
-python demo_ml_bot.py --save-model models/my_model.pkl
-```
-
-## Extending the System
-
-### Add Custom Features
+### Example 4: Ensemble Strategy
 
 ```python
-from ml_bots.data_pipeline import DataTransformer
-
-class CustomTransformer(DataTransformer):
-    def add_custom_features(self, df):
-        # Add your custom features
-        df['custom_feature'] = df['yes_ask_close'].rolling(3).mean()
-        return df
+# Combine ML with technical analyzers
+simulator = setup_simulation(
+    analyzer_names=['ml_predictor', 'rsi', 'macd', 'bollinger_bands'],
+    analyzer_configs={
+        'ml_predictor': {
+            'model_type': 'random_forest',
+            'hard_min_confidence': 0.75
+        },
+        'rsi': {'hard_overbought_threshold': 75},
+        'macd': {'hard_signal_threshold': 2.0}
+    }
+)
 ```
 
-### Create Custom Models
+## Integration Benefits
 
-```python
-from ml_bots.models.price_predictor import PricePredictor
+By integrating with existing infrastructure:
 
-class CustomPredictor(PricePredictor):
-    def build_model(self, input_dim):
-        # Implement your custom model
-        pass
-```
+✅ **Works with Simulator**: Full backtesting and performance tracking
+✅ **Uses TradeManager**: Position sizing, risk management, P&L tracking
+✅ **Combines with Analyzers**: Build ensemble strategies
+✅ **Standard Interface**: Same `Opportunity` model as other analyzers
+✅ **Existing Notifications**: Console, file, email, Slack support
 
-### Custom Trading Bot
+## Tips for Best Performance
 
-```python
-from ml_bots.bots.ml_trading_bot import MLTradingBot
-
-class CustomMLBot(MLTradingBot):
-    def custom_signal_logic(self, prediction):
-        # Add custom logic for signal generation
-        pass
-```
-
-## Performance Tips
-
-1. **More Data**: Use more historical days (--days 14 or 30)
-2. **More Markets**: Train on more markets (--markets 30+)
-3. **Random Forest**: Generally performs best for this task
-4. **Feature Engineering**: Add domain-specific features
-5. **Ensemble Models**: Combine multiple model predictions
+1. **Training Data**: Use 7-14 days of historical data
+2. **Market Selection**: Train on high-volume, active markets
+3. **Model Choice**: Random Forest works well for most cases
+4. **Confidence Threshold**: Start with 0.65-0.70, adjust based on results
+5. **Ensemble**: Combine with technical analyzers for better signals
+6. **Monitoring**: Track win rate and adjust thresholds accordingly
 
 ## Troubleshooting
 
 ### No Training Data
 
-**Problem**: "No data fetched for training"
+**Problem**: "No training data available"
 
 **Solutions**:
-- Increase `--days` parameter for more historical data
-- Decrease `min_volume` threshold in code
-- Try different time periods (markets have varying activity)
+- Increase `training_days` in config
+- Lower `min_volume` threshold
+- Ensure markets are active during training window
+
+### Model Not Training
+
+**Problem**: Model training fails
+
+**Solutions**:
+- Check that ML dependencies are installed (`pip install pandas numpy scikit-learn torch`)
+- Verify Kalshi API is accessible
+- Increase `training_markets` parameter
+
+### No Signals Generated
+
+**Problem**: ML analyzer finds no opportunities
+
+**Solutions**:
+- Lower `hard_min_confidence` or `soft_min_confidence`
+- Ensure model is trained (`is_trained=True`)
+- Check that analyzing non-training markets
+- Verify markets have sufficient historical data
 
 ### Low Accuracy
 
@@ -344,42 +324,59 @@ class CustomMLBot(MLTradingBot):
 
 **Solutions**:
 - Market prediction is inherently difficult
-- Try different model types (--model neural_network)
-- Add more features in data_transformer.py
-- Use longer historical periods (--days 30)
-- Focus on specific market types
+- Try different model types
+- Increase training data (days and markets)
+- Focus on specific market categories
+- Combine with other analyzers
 
-### No Signals Generated
+## Extending the System
 
-**Problem**: "No trading signals generated"
+### Create Custom Analyzer
 
-**Solutions**:
-- Lower confidence threshold (--confidence 0.55)
-- Increase signal markets (--signal-markets 20)
-- Ensure markets have sufficient historical data
+```python
+from analyzers.ml_predictor_analyzer import MLPredictorAnalyzer
 
-## Disclaimer
+class CustomMLAnalyzer(MLPredictorAnalyzer):
+    def _analyze_market(self, market):
+        # Add custom logic
+        opportunity = super()._analyze_market(market)
+        if opportunity:
+            # Modify opportunity based on custom criteria
+            pass
+        return opportunity
+```
 
-**For educational and research purposes only.**
+### Add Custom Features
 
-- Machine learning predictions are probabilistic, not guaranteed
-- Past performance does not indicate future results
-- Always perform additional due diligence
-- Start with small positions to test strategies
-- Never risk more than you can afford to lose
+```python
+from ml_bots.data_pipeline import DataTransformer
+
+class CustomTransformer(DataTransformer):
+    def add_technical_features(self, df):
+        df = super().add_technical_features(df)
+        # Add your custom features
+        df['custom_indicator'] = df['yes_ask_close'].rolling(5).std()
+        return df
+```
+
+## Performance Metrics
+
+The ML analyzer is evaluated on:
+- **Training Accuracy**: Performance on training set
+- **Validation Accuracy**: Performance on held-out validation set
+- **Win Rate**: Percentage of profitable trades (in simulation)
+- **Average P&L**: Average profit per trade
+- **Total Return**: Overall portfolio return
 
 ## Future Enhancements
 
 Potential improvements:
-
-- [ ] LSTM/GRU models for sequence prediction
-- [ ] Reinforcement learning for strategy optimization
-- [ ] Multi-market correlation analysis
-- [ ] Sentiment analysis from market descriptions
-- [ ] Portfolio optimization
-- [ ] Backtesting framework
-- [ ] Live trading integration
-- [ ] Model performance tracking
+- [ ] LSTM/GRU for sequence modeling
+- [ ] Ensemble of multiple models
+- [ ] Market-specific models (events, indices, etc.)
+- [ ] Online learning (incremental updates)
+- [ ] Sentiment analysis integration
+- [ ] Cross-market correlation features
 
 ## License
 

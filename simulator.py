@@ -37,6 +37,7 @@ from analyzers.mean_reversion_analyzer import MeanReversionAnalyzer
 from analyzers.volume_surge_analyzer import VolumeSurgeAnalyzer
 from analyzers.orderbook_depth_analyzer import OrderbookDepthAnalyzer
 from analyzers.price_extreme_reversion_analyzer import PriceExtremeReversionAnalyzer
+from analyzers.ml_predictor_analyzer import MLPredictorAnalyzer
 
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,8 @@ ANALYZER_REGISTRY = {
     "orderbook_depth": OrderbookDepthAnalyzer,
     # Price-based analyzers
     "price_extreme_reversion": PriceExtremeReversionAnalyzer,
+    # ML-based analyzers
+    "ml_predictor": MLPredictorAnalyzer,
 }
 
 
